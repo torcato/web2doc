@@ -5,14 +5,17 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from web2doc.discovery.models import CandidateAction, FrontierStatus, PlannerUsage, StateIdentity
 from web2doc.domain.models import (
     Action,
     ArtifactDraft,
     AttemptStatus,
+    DiscoveryLimits,
+    DiscoveryMode,
     ExecutionResult,
     ObservationDraft,
     ProjectConfig,
@@ -23,17 +26,32 @@ from web2doc.domain.models import (
 from web2doc.storage.database import (
     ActionAttemptRow,
     ArtifactRow,
+    FeatureRow,
+    FrontierItemRow,
     ObservationRow,
     ProjectLockRow,
     ProjectRow,
     RoleRow,
     RunRow,
+    StateRow,
+    TransitionRow,
+    UsageEventRow,
     make_engine,
 )
 
 
 class ProjectBusyError(RuntimeError):
     pass
+
+
+def process_is_alive(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class Repository:
@@ -47,21 +65,16 @@ class Repository:
     def register_project(self, root: Path, config: ProjectConfig) -> tuple[str, dict[str, str]]:
         canonical_root = str(root.resolve())
         with self.sessions.begin() as session:
-            project = session.scalar(
-                select(ProjectRow).where(ProjectRow.root_path == canonical_root)
-            )
+            project = session.scalar(select(ProjectRow).where(ProjectRow.root_path == canonical_root))
             if project is None:
-                project = ProjectRow(
-                    id=new_id(), name=config.name, root_path=canonical_root, created_at=utc_now()
-                )
+                project = ProjectRow(id=new_id(), name=config.name, root_path=canonical_root, created_at=utc_now())
                 session.add(project)
                 session.flush()
             else:
                 project.name = config.name
 
             existing = {
-                row.name: row
-                for row in session.scalars(select(RoleRow).where(RoleRow.project_id == project.id))
+                row.name: row for row in session.scalars(select(RoleRow).where(RoleRow.project_id == project.id))
             }
             role_ids: dict[str, str] = {}
             for role_config in config.roles:
@@ -79,7 +92,17 @@ class Repository:
                 role_ids[role_config.name] = role.id
             return project.id, role_ids
 
-    def create_run(self, project_id: str, role_id: str, procedure_name: str) -> RunRow:
+    def create_run(
+        self,
+        project_id: str,
+        role_id: str,
+        procedure_name: str,
+        *,
+        stage: str = "capture",
+        scenario: str = "default",
+        discovery_mode: DiscoveryMode | None = None,
+        limits: DiscoveryLimits | None = None,
+    ) -> RunRow:
         now = utc_now()
         run = RunRow(
             id=new_id(),
@@ -87,6 +110,10 @@ class Repository:
             role_id=role_id,
             procedure_name=procedure_name,
             status=RunStatus.QUEUED,
+            stage=stage,
+            scenario=scenario,
+            discovery_mode=discovery_mode,
+            limits_json=limits.model_dump_json() if limits is not None else None,
             created_at=now,
             updated_at=now,
         )
@@ -169,7 +196,11 @@ class Repository:
         return row
 
     def create_attempt(
-        self, run_id: str, sequence: int, action: Action, before_observation_id: str
+        self,
+        run_id: str,
+        sequence: int,
+        action: Action,
+        before_observation_id: str | None,
     ) -> ActionAttemptRow:
         row = ActionAttemptRow(
             id=new_id(),
@@ -224,10 +255,225 @@ class Repository:
                 )
             )
 
+    def next_attempt_sequence(self, run_id: str) -> int:
+        with self.sessions() as session:
+            maximum = session.scalar(
+                select(func.max(ActionAttemptRow.sequence)).where(ActionAttemptRow.run_id == run_id)
+            )
+            return int(maximum or 0) + 1
+
+    def add_state(
+        self,
+        *,
+        project_id: str,
+        role_id: str,
+        scenario: str,
+        observation_id: str,
+        identity: StateIdentity,
+    ) -> tuple[StateRow, bool]:
+        with self.sessions.begin() as session:
+            state = session.scalar(
+                select(StateRow).where(
+                    StateRow.project_id == project_id,
+                    StateRow.role_id == role_id,
+                    StateRow.scenario == scenario,
+                    StateRow.fingerprint == identity.fingerprint,
+                    StateRow.algorithm_version == identity.algorithm_version,
+                )
+            )
+            created = state is None
+            if state is None:
+                state = StateRow(
+                    id=new_id(),
+                    project_id=project_id,
+                    role_id=role_id,
+                    scenario=scenario,
+                    fingerprint=identity.fingerprint,
+                    algorithm_version=identity.algorithm_version,
+                    route=identity.route,
+                    normalized_structure=identity.normalized_structure,
+                    representative_observation_id=observation_id,
+                    created_at=utc_now(),
+                )
+                session.add(state)
+                session.flush()
+            observation = session.get(ObservationRow, observation_id)
+            if observation is None:
+                raise KeyError(f"observation not found: {observation_id}")
+            observation.state_id = state.id
+            return state, created
+
+    def add_transition(
+        self,
+        *,
+        run_id: str,
+        source_state_id: str,
+        target_state_id: str,
+        attempt_id: str,
+    ) -> TransitionRow:
+        row = TransitionRow(
+            id=new_id(),
+            run_id=run_id,
+            source_state_id=source_state_id,
+            target_state_id=target_state_id,
+            attempt_id=attempt_id,
+            created_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def enqueue_frontier(
+        self,
+        *,
+        run_id: str,
+        state_id: str,
+        candidate: CandidateAction,
+        path: list[Action],
+        rationale: str,
+        priority: int,
+        depth: int,
+    ) -> FrontierItemRow:
+        with self.sessions.begin() as session:
+            existing = session.scalar(
+                select(FrontierItemRow).where(
+                    FrontierItemRow.run_id == run_id,
+                    FrontierItemRow.state_id == state_id,
+                    FrontierItemRow.action_signature == candidate.signature,
+                )
+            )
+            if existing is not None:
+                if existing.status == FrontierStatus.PENDING:
+                    existing.priority = max(existing.priority, priority)
+                return existing
+            now = utc_now()
+            row = FrontierItemRow(
+                id=new_id(),
+                run_id=run_id,
+                state_id=state_id,
+                action_signature=candidate.signature,
+                action_json=candidate.action.model_dump_json(),
+                path_json=json.dumps([action.model_dump(mode="json") for action in path]),
+                label=candidate.label,
+                rationale=rationale,
+                priority=priority,
+                depth=depth,
+                status=FrontierStatus.PENDING,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+            return row
+
+    def next_frontier(self, run_id: str, *, state_id: str | None = None) -> FrontierItemRow | None:
+        with self.sessions() as session:
+            statement = select(FrontierItemRow).where(
+                FrontierItemRow.run_id == run_id,
+                FrontierItemRow.status == FrontierStatus.PENDING,
+            )
+            if state_id is not None:
+                statement = statement.where(FrontierItemRow.state_id == state_id)
+            return session.scalar(
+                statement.order_by(FrontierItemRow.priority.desc(), FrontierItemRow.created_at).limit(1)
+            )
+
+    def frontier_exists_for_state(self, run_id: str, state_id: str) -> bool:
+        with self.sessions() as session:
+            return (
+                session.scalar(
+                    select(func.count(FrontierItemRow.id)).where(
+                        FrontierItemRow.run_id == run_id,
+                        FrontierItemRow.state_id == state_id,
+                    )
+                )
+                or 0
+            ) > 0
+
+    def set_frontier_status(
+        self,
+        frontier_id: str,
+        status: FrontierStatus,
+        *,
+        reason: str | None = None,
+        attempt_id: str | None = None,
+    ) -> None:
+        with self.sessions.begin() as session:
+            row = session.get(FrontierItemRow, frontier_id)
+            if row is None:
+                raise KeyError(f"frontier item not found: {frontier_id}")
+            row.status = status
+            row.reason = reason
+            row.attempt_id = attempt_id
+            row.updated_at = utc_now()
+
+    def skip_pending_frontier(self, run_id: str, reason: str) -> int:
+        with self.sessions.begin() as session:
+            result = session.execute(
+                update(FrontierItemRow)
+                .where(
+                    FrontierItemRow.run_id == run_id,
+                    FrontierItemRow.status == FrontierStatus.PENDING,
+                )
+                .values(status=FrontierStatus.SKIPPED, reason=reason, updated_at=utc_now())
+            )
+            return int(result.rowcount)  # type: ignore[attr-defined]
+
+    def add_feature(
+        self,
+        *,
+        run_id: str,
+        role_id: str,
+        state_id: str,
+        observation_id: str,
+        title: str,
+        description: str,
+        confidence: float,
+        unresolved: list[str] | None = None,
+    ) -> FeatureRow:
+        with self.sessions.begin() as session:
+            existing = session.scalar(select(FeatureRow).where(FeatureRow.run_id == run_id, FeatureRow.title == title))
+            if existing is not None:
+                existing.confidence = max(existing.confidence, confidence)
+                if description and not existing.description:
+                    existing.description = description
+                return existing
+            row = FeatureRow(
+                id=new_id(),
+                run_id=run_id,
+                role_id=role_id,
+                state_id=state_id,
+                observation_id=observation_id,
+                title=title,
+                description=description,
+                confidence=confidence,
+                unresolved_json=json.dumps(unresolved or []),
+                created_at=utc_now(),
+            )
+            session.add(row)
+            return row
+
+    def add_usage_event(self, run_id: str, model_name: str, usage: PlannerUsage, duration_ms: int) -> None:
+        with self.sessions.begin() as session:
+            session.add(
+                UsageEventRow(
+                    id=new_id(),
+                    run_id=run_id,
+                    model_name=model_name,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    usage_reported=int(usage.usage_reported),
+                    duration_ms=duration_ms,
+                    created_at=utc_now(),
+                )
+            )
+
     def recover_interrupted(self, project_id: str) -> dict[str, int]:
         recovered_attempts = 0
         paused_runs = 0
         with self.sessions.begin() as session:
+            locks = tuple(session.scalars(select(ProjectLockRow).where(ProjectLockRow.project_id == project_id)))
+            if any(process_is_alive(lock.process_id) for lock in locks):
+                raise ProjectBusyError("cannot recover while the recorded worker process is alive")
             executing = tuple(
                 session.scalars(
                     select(ActionAttemptRow)
@@ -240,9 +486,7 @@ class Repository:
             )
             for attempt in executing:
                 attempt.status = AttemptStatus.UNCERTAIN
-                attempt.error = (
-                    "worker stopped while browser action was executing; reconcile before retry"
-                )
+                attempt.error = "worker stopped while browser action was executing; reconcile before retry"
                 attempt.updated_at = utc_now()
                 recovered_attempts += 1
 
@@ -277,6 +521,9 @@ class Repository:
             return {
                 "id": run.id,
                 "procedure": run.procedure_name,
+                "stage": run.stage,
+                "scenario": run.scenario,
+                "discovery_mode": run.discovery_mode,
                 "status": run.status,
                 "stop_reason": run.stop_reason,
                 "attempts": [
@@ -288,5 +535,95 @@ class Repository:
                         "error": row.error,
                     }
                     for row in attempts
+                ],
+            }
+
+    def discovery_report(self, run_id: str) -> dict[str, object]:
+        with self.sessions() as session:
+            run = session.get(RunRow, run_id)
+            if run is None:
+                raise KeyError(f"run not found: {run_id}")
+            state_ids = {
+                value
+                for value in session.scalars(
+                    select(ObservationRow.state_id).where(
+                        ObservationRow.run_id == run_id,
+                        ObservationRow.state_id.is_not(None),
+                    )
+                )
+                if value is not None
+            }
+            states = tuple(
+                session.scalars(select(StateRow).where(StateRow.id.in_(state_ids)).order_by(StateRow.created_at))
+            )
+            transitions = tuple(session.scalars(select(TransitionRow).where(TransitionRow.run_id == run_id)))
+            frontier = tuple(
+                session.scalars(
+                    select(FrontierItemRow)
+                    .where(FrontierItemRow.run_id == run_id)
+                    .order_by(FrontierItemRow.priority.desc())
+                )
+            )
+            features = tuple(
+                session.scalars(select(FeatureRow).where(FeatureRow.run_id == run_id).order_by(FeatureRow.title))
+            )
+            usage = tuple(session.scalars(select(UsageEventRow).where(UsageEventRow.run_id == run_id)))
+            status_counts: dict[str, int] = {}
+            for item in frontier:
+                status_counts[item.status] = status_counts.get(item.status, 0) + 1
+            return {
+                "run": {
+                    "id": run.id,
+                    "status": run.status,
+                    "stop_reason": run.stop_reason,
+                    "mode": run.discovery_mode,
+                    "scenario": run.scenario,
+                },
+                "coverage": {
+                    "states": len(states),
+                    "transitions": len(transitions),
+                    "frontier": status_counts,
+                    "model_calls": len(usage),
+                    "input_tokens": sum(event.input_tokens for event in usage),
+                    "output_tokens": sum(event.output_tokens for event in usage),
+                },
+                "states": [
+                    {
+                        "id": state.id,
+                        "route": state.route,
+                        "fingerprint": state.fingerprint,
+                        "algorithm_version": state.algorithm_version,
+                    }
+                    for state in states
+                ],
+                "transitions": [
+                    {
+                        "id": transition.id,
+                        "source_state_id": transition.source_state_id,
+                        "target_state_id": transition.target_state_id,
+                        "attempt_id": transition.attempt_id,
+                    }
+                    for transition in transitions
+                ],
+                "features": [
+                    {
+                        "title": feature.title,
+                        "description": feature.description,
+                        "confidence": feature.confidence,
+                        "state_id": feature.state_id,
+                        "observation_id": feature.observation_id,
+                        "unresolved": json.loads(feature.unresolved_json),
+                    }
+                    for feature in features
+                ],
+                "unexplored": [
+                    {
+                        "label": item.label,
+                        "status": item.status,
+                        "reason": item.reason,
+                        "depth": item.depth,
+                    }
+                    for item in frontier
+                    if item.status != FrontierStatus.EXPLORED
                 ],
             }

@@ -52,6 +52,22 @@ class FakeBrowser:
         self.closed = True
 
 
+class CancellingBrowser(FakeBrowser):
+    def __init__(self, repository) -> None:
+        super().__init__()
+        self.repository = repository
+        self.run_id = ""
+
+    async def start(self, *, run_id: str, headed: bool = False) -> FakeSession:
+        self.run_id = run_id
+        return await super().start(run_id=run_id, headed=headed)
+
+    async def execute(self, session: FakeSession, action) -> ExecutionResult:
+        result = await super().execute(session, action)
+        self.repository.request_cancel(self.run_id)
+        return result
+
+
 def make_runner(repository, tmp_path: Path, project_config, browser: FakeBrowser):
     project_id, roles = repository.register_project(tmp_path, project_config)
     return ProcedureRunner(
@@ -65,9 +81,7 @@ def make_runner(repository, tmp_path: Path, project_config, browser: FakeBrowser
 
 
 @pytest.mark.asyncio
-async def test_successful_procedure_is_awaiting_review(
-    repository, tmp_path, project_config
-) -> None:
+async def test_successful_procedure_is_awaiting_review(repository, tmp_path, project_config) -> None:
     browser = FakeBrowser()
     runner = make_runner(repository, tmp_path, project_config, browser)
     procedure = Procedure(
@@ -100,9 +114,7 @@ async def test_denied_action_never_reaches_browser(repository, tmp_path, project
 
 
 @pytest.mark.asyncio
-async def test_failed_write_is_uncertain_and_not_retried(
-    repository, tmp_path, project_config
-) -> None:
+async def test_failed_write_is_uncertain_and_not_retried(repository, tmp_path, project_config) -> None:
     browser = FakeBrowser(fail_on_write=True)
     runner = make_runner(repository, tmp_path, project_config, browser)
     procedure = Procedure(
@@ -122,3 +134,18 @@ async def test_failed_write_is_uncertain_and_not_retried(
     assert repository.get_run(run_id).status == "paused"
     assert repository.list_attempts(run_id)[0].status == "uncertain"
     assert browser.executed == ["click"]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_not_overwritten_after_last_action(repository, tmp_path, project_config) -> None:
+    browser = CancellingBrowser(repository)
+    runner = make_runner(repository, tmp_path, project_config, browser)
+    procedure = Procedure(
+        name="cancel",
+        actions=[NavigateAction(description="Open fixture", url="http://127.0.0.1:8765/")],
+    )
+
+    run_id = await runner.run(procedure)
+
+    assert repository.get_run(run_id).status == "cancelled"
+    assert repository.list_attempts(run_id)[0].status == "succeeded"

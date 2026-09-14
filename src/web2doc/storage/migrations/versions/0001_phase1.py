@@ -41,9 +41,7 @@ def upgrade() -> None:
             sa.ForeignKey("projects.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "role_id", sa.String(36), sa.ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
-        ),
+        sa.Column("role_id", sa.String(36), sa.ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False),
         sa.Column("procedure_name", sa.String(300), nullable=False),
         sa.Column("status", sa.String(40), nullable=False),
         sa.Column("stop_reason", sa.Text()),
@@ -53,9 +51,7 @@ def upgrade() -> None:
     op.create_table(
         "artifacts",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column(
-            "run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
-        ),
+        sa.Column("run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False),
         sa.Column("relative_path", sa.Text(), nullable=False, unique=True),
         sa.Column("sha256", sa.String(64), nullable=False),
         sa.Column("media_type", sa.String(200), nullable=False),
@@ -66,9 +62,7 @@ def upgrade() -> None:
     op.create_table(
         "observations",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column(
-            "run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
-        ),
+        sa.Column("run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False),
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("title", sa.Text(), nullable=False),
         sa.Column(
@@ -88,9 +82,7 @@ def upgrade() -> None:
     op.create_table(
         "action_attempts",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column(
-            "run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
-        ),
+        sa.Column("run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False),
         sa.Column("action_id", sa.String(36), nullable=False),
         sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("action_kind", sa.String(30), nullable=False),
@@ -124,9 +116,7 @@ def upgrade() -> None:
             sa.ForeignKey("projects.id", ondelete="CASCADE"),
             primary_key=True,
         ),
-        sa.Column(
-            "run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False
-        ),
+        sa.Column("run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False),
         sa.Column("process_id", sa.Integer(), nullable=False),
         sa.Column("acquired_at", sa.DateTime(timezone=True), nullable=False),
     )

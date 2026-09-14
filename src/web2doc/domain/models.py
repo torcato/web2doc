@@ -46,6 +46,42 @@ class Sensitivity(StrEnum):
     PRIVATE = "private"
 
 
+class DiscoveryMode(StrEnum):
+    UNGUIDED = "unguided"
+    SUPPLIED = "supplied"
+
+
+class DiscoveryLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_actions: int = Field(default=200, ge=1, le=10_000)
+    max_states: int = Field(default=100, ge=1, le=5_000)
+    max_depth: int = Field(default=12, ge=1, le=100)
+    max_duration_seconds: int = Field(default=1_800, ge=1, le=86_400)
+    max_model_calls: int = Field(default=100, ge=0, le=10_000)
+    max_output_tokens: int = Field(default=100_000, ge=0)
+    max_tokens_per_call: int = Field(default=2_000, ge=1)
+    max_candidates_per_state: int = Field(default=20, ge=1, le=200)
+    max_visits_per_state: int = Field(default=3, ge=1, le=100)
+    model_retries: int = Field(default=2, ge=0, le=10)
+
+
+class DiscoveryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scenario: str = Field(default="default", min_length=1, max_length=100)
+    ignored_query_parameters: set[str] = Field(
+        default_factory=lambda: {"_", "cache_bust", "cacheBust", "nonce", "timestamp", "ts"}
+    )
+    volatile_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"\b\d{4}-\d{2}-\d{2}[T ][0-9:.+Z-]+\b",
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b",
+        ]
+    )
+    limits: DiscoveryLimits = Field(default_factory=DiscoveryLimits)
+
+
 class RoleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -71,6 +107,7 @@ class ProjectConfig(BaseModel):
     allowed_origins: set[str]
     roles: list[RoleConfig]
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
 
     @field_validator("allowed_origins")
     @classmethod
@@ -162,13 +199,7 @@ class WaitAction(ActionBase):
 
 
 Action = Annotated[
-    NavigateAction
-    | ClickAction
-    | FillAction
-    | SelectAction
-    | PressAction
-    | ScrollAction
-    | WaitAction,
+    NavigateAction | ClickAction | FillAction | SelectAction | PressAction | ScrollAction | WaitAction,
     Field(discriminator="kind"),
 ]
 
@@ -180,6 +211,19 @@ class Procedure(BaseModel):
     actions: list[Action] = Field(min_length=1)
 
 
+class ControlDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    name: str
+    href: str | None = None
+    label: str | None = None
+    test_id: str | None = None
+    input_type: str | None = None
+    disabled: bool = False
+    options: list[str] = Field(default_factory=list)
+
+
 class ObservationDraft(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -187,6 +231,11 @@ class ObservationDraft(BaseModel):
     title: str
     aria_snapshot: str
     screenshot: bytes
+    controls: list[ControlDraft] = Field(default_factory=list)
+    active_dialogs: list[str] = Field(default_factory=list)
+    selected_tabs: list[str] = Field(default_factory=list)
+    alerts: list[str] = Field(default_factory=list)
+    invalid_controls: list[str] = Field(default_factory=list)
     observed_at: datetime = Field(default_factory=utc_now)
 
 

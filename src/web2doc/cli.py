@@ -9,12 +9,15 @@ import typer
 
 from web2doc.browser.playwright import PlaywrightBrowser
 from web2doc.config import RUNTIME_DIR, initialize_project, load_procedure, load_project
-from web2doc.domain.models import ProjectConfig
+from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
+from web2doc.discovery.runner import ExplorationRunner
+from web2doc.domain.models import DiscoveryMode, ProjectConfig
 from web2doc.orchestration.runner import ProcedureRunner
 from web2doc.policy.actions import ActionPolicy
+from web2doc.settings import RuntimeSettings
 from web2doc.storage.artifacts import ArtifactStore
 from web2doc.storage.database import upgrade_database
-from web2doc.storage.repository import Repository
+from web2doc.storage.repository import ProjectBusyError, Repository
 
 app = typer.Typer(no_args_is_help=True, help="Capture evidence-backed website procedures.")
 
@@ -75,6 +78,86 @@ def run_procedure(
 
 
 @app.command()
+def discover(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    role: Annotated[str, typer.Option("--role")] = "default",
+    mode: Annotated[DiscoveryMode, typer.Option("--mode")] = DiscoveryMode.UNGUIDED,
+    procedure_path: Annotated[
+        Path | None,
+        typer.Option("--procedure", help="Required for supplied-workflow discovery"),
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Pydantic AI model name; omit for deterministic heuristic ranking"),
+    ] = None,
+    max_actions: Annotated[int | None, typer.Option("--max-actions", min=1)] = None,
+    max_states: Annotated[int | None, typer.Option("--max-states", min=1)] = None,
+    max_seconds: Annotated[int | None, typer.Option("--max-seconds", min=1)] = None,
+    headed: Annotated[bool, typer.Option("--headed")] = False,
+) -> None:
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        if mode is DiscoveryMode.SUPPLIED and procedure_path is None:
+            raise typer.BadParameter("--procedure is required when --mode supplied is used")
+        if mode is DiscoveryMode.UNGUIDED and procedure_path is not None:
+            raise typer.BadParameter("--procedure can only be used with --mode supplied")
+        procedure = load_procedure(procedure_path) if procedure_path is not None else None
+        settings = RuntimeSettings()
+        selected_model = model or settings.llm_model
+        planner = PydanticAIPlanner(selected_model) if selected_model else HeuristicPlanner()
+        overrides = {
+            key: value
+            for key, value in {
+                "max_actions": max_actions,
+                "max_states": max_states,
+                "max_duration_seconds": max_seconds,
+            }.items()
+            if value is not None
+        }
+        limits = config.discovery.limits.model_copy(update=overrides)
+        browser = PlaywrightBrowser(
+            project_root=project_dir,
+            config=config,
+            role=config.role(role),
+            settings=settings,
+        )
+        runner = ExplorationRunner(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            browser=browser,
+            policy=ActionPolicy(config),
+            planner=planner,
+            config=config,
+            project_id=project_id,
+            role_id=roles[role],
+            role_name=role,
+        )
+        run_id = asyncio.run(
+            runner.run(
+                mode=mode,
+                supplied_procedure=procedure,
+                headed=headed,
+                limits=limits,
+            )
+        )
+        typer.echo(json.dumps(repository.discovery_report(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("discovery-report")
+def discovery_report(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Argument(help="Discovery run identifier")],
+) -> None:
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        typer.echo(json.dumps(repository.discovery_report(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command()
 def status(
     project_dir: Annotated[Path, typer.Argument(help="Project directory")],
     run_id: Annotated[str, typer.Argument(help="Run identifier")],
@@ -103,7 +186,12 @@ def cancel(
 def recover(project_dir: Annotated[Path, typer.Argument(help="Project directory")]) -> None:
     _config, repository, project_id, _roles = _open_project(project_dir)
     try:
-        typer.echo(json.dumps(repository.recover_interrupted(project_id), indent=2))
+        try:
+            result = repository.recover_interrupted(project_id)
+        except ProjectBusyError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo(json.dumps(result, indent=2))
     finally:
         repository.close()
 

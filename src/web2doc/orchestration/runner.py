@@ -42,9 +42,7 @@ class ProcedureRunner[SessionT]:
             locked = True
             self.repository.set_run_status(run.id, RunStatus.RUNNING)
             session = await self.browser.start(run_id=run.id, headed=headed)
-            observation = await self._record_observation(
-                run.id, await self.browser.observe(session)
-            )
+            observation = await self._record_observation(run.id, await self.browser.observe(session))
 
             for sequence, action in enumerate(procedure.actions, start=1):
                 current = self.repository.get_run(run.id)
@@ -64,25 +62,15 @@ class ProcedureRunner[SessionT]:
                     self.repository.set_run_status(run.id, RunStatus.PAUSED, decision.reason)
                     return run.id
 
-                self.repository.set_attempt_status(
-                    attempt.id, AttemptStatus.ALLOWED, policy_reason=decision.reason
-                )
+                self.repository.set_attempt_status(attempt.id, AttemptStatus.ALLOWED, policy_reason=decision.reason)
                 self.repository.set_attempt_status(attempt.id, AttemptStatus.EXECUTING)
                 try:
                     result = await self.browser.execute(session, action)
-                    observation = await self._record_observation(
-                        run.id, await self.browser.observe(session)
-                    )
+                    observation = await self._record_observation(run.id, await self.browser.observe(session))
                 except BaseException as exc:
-                    status = (
-                        AttemptStatus.UNCERTAIN
-                        if action.effect is Effect.WRITE
-                        else AttemptStatus.FAILED
-                    )
+                    status = AttemptStatus.UNCERTAIN if action.effect is Effect.WRITE else AttemptStatus.FAILED
                     self.repository.set_attempt_status(attempt.id, status, error=str(exc))
-                    run_status = (
-                        RunStatus.PAUSED if status is AttemptStatus.UNCERTAIN else RunStatus.FAILED
-                    )
+                    run_status = RunStatus.PAUSED if status is AttemptStatus.UNCERTAIN else RunStatus.FAILED
                     self.repository.set_run_status(run.id, run_status, str(exc))
                     return run.id
                 self.repository.set_attempt_status(
@@ -92,6 +80,9 @@ class ProcedureRunner[SessionT]:
                     after_observation_id=observation.id,
                 )
 
+            current = self.repository.get_run(run.id)
+            if current is not None and current.status == RunStatus.CANCELLED:
+                return run.id
             self.repository.set_run_status(run.id, RunStatus.AWAITING_REVIEW)
             return run.id
         except BaseException as exc:

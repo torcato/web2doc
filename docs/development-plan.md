@@ -1,12 +1,14 @@
 # Phased development plan
 
 Date: September 14, 2026  
-Status: planned; implementation has not started
+Status: in progress; Phase 2 core implemented, live discovery quality gate pending
 
 Related documents:
 
 - [Architecture and library decisions](architecture-and-development-plan.md)
 - [Feasibility case study](website-documentation-case-study.md)
+- [Phase 1 implementation record](phase-1-implementation.md)
+- [Phase 2 implementation record](phase-2-implementation.md)
 
 ## Objective
 
@@ -172,17 +174,17 @@ Execute a supplied procedure reliably and retain enough evidence to explain what
 
 ### Implementation tasks
 
-- [ ] Implement project configuration and initial Typer CLI commands.
-- [ ] Add Pydantic schemas for runs, roles, actions, observations, and execution results.
-- [ ] Create SQLAlchemy repositories and Alembic migrations for SQLite.
-- [ ] Implement artifact storage with hashes and consistent database references.
-- [ ] Implement the async Playwright browser adapter and semantic target resolution.
-- [ ] Support operator-assisted login and separate authentication state per role.
-- [ ] Capture structural observations, screenshots, and private diagnostic traces.
-- [ ] Enforce configured target scope and allowed operations before execution.
-- [ ] Persist action intent before browser interaction and record the resulting outcome.
-- [ ] Add cancellation, browser cleanup, a single-worker project lock, and basic restart handling.
-- [ ] Mark interrupted actions with unknown effects as uncertain; prevent automatic repetition of uncertain writes.
+- [x] Implement project configuration and initial Typer CLI commands.
+- [x] Add Pydantic schemas for runs, roles, actions, observations, and execution results.
+- [x] Create SQLAlchemy repositories and Alembic migrations for SQLite.
+- [x] Implement artifact storage with hashes and consistent database references.
+- [x] Implement the async Playwright browser adapter and semantic target resolution.
+- [x] Support operator-assisted login and separate authentication state per role.
+- [x] Capture structural observations, screenshots, and private diagnostic traces.
+- [x] Enforce configured target scope and allowed operations before execution.
+- [x] Persist action intent before browser interaction and record the resulting outcome.
+- [x] Add cancellation, browser cleanup, a single-worker project lock, and basic restart handling.
+- [x] Mark interrupted actions with unknown effects as uncertain; prevent automatic repetition of uncertain writes.
 
 ### Deliverables
 
@@ -207,16 +209,16 @@ Build a bounded map of meaningful interface states and candidate features.
 
 ### Implementation tasks
 
-- [ ] Normalize observations into canonical states while retaining original evidence.
-- [ ] Include role, scenario, route, active dialog/tab, and meaningful control state in identity.
-- [ ] Ignore configured volatile values while preserving errors and empty/populated states.
-- [ ] Persist discovered transitions and a queue of unexplored actions.
-- [ ] Enumerate candidate controls and rank actions by novelty and exploration value.
-- [ ] Integrate Pydantic AI for typed action proposals and feature interpretations.
-- [ ] Validate proposals through the phase 1 policy and executor.
-- [ ] Add loop detection, bounded retries, and limits for time, actions, states, model calls, and token usage.
-- [ ] Separate supplied-workflow mode from unguided discovery mode.
-- [ ] Report discovered features, skipped actions, blocked areas, and explicit stop reasons.
+- [x] Normalize observations into canonical states while retaining original evidence.
+- [x] Include role, scenario, route, active dialog/tab, and meaningful control state in identity.
+- [x] Ignore configured volatile values while preserving errors and empty/populated states.
+- [x] Persist discovered transitions and a queue of unexplored actions.
+- [x] Enumerate candidate controls and rank actions by novelty and exploration value.
+- [x] Integrate Pydantic AI for typed action proposals and feature interpretations.
+- [x] Validate proposals through the phase 1 policy and executor.
+- [x] Add loop detection, bounded retries, and limits for time, actions, states, model calls, and token usage.
+- [x] Separate supplied-workflow mode from unguided discovery mode.
+- [x] Report discovered features, skipped actions, blocked areas, and explicit stop reasons.
 
 ### Deliverables
 
@@ -233,6 +235,8 @@ A persisted state graph, a feature inventory, and a coverage/uncertainty report 
 - Run five live discovery trials; target mean feature recall of at least 80% against the ten-item fixture inventory, reporting every run and its blockers.
 
 The recall target applies to the fixture benchmark. It does not establish completeness on an arbitrary website.
+
+Implementation is complete. Phase acceptance remains pending until the frozen ten-workflow fixture inventory exists and five budgeted live-model trials demonstrate and report the recall gate.
 
 ## Phase 3 — Workflow construction and verification
 

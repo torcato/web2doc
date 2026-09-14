@@ -17,19 +17,12 @@ class ActionPolicy:
     def __init__(self, config: ProjectConfig) -> None:
         self.config = config
         self.allowed_origins = {origin_for(origin) for origin in config.allowed_origins}
-        self.supporting_origins = {
-            origin_for(origin) for origin in config.policy.supporting_origins
-        }
+        self.supporting_origins = {origin_for(origin) for origin in config.policy.supporting_origins}
 
     def evaluate(self, action: Action) -> PolicyDecision:
         if action.kind not in self.config.policy.allowed_actions:
-            return PolicyDecision(
-                allowed=False, reason=f"action kind is not allowed: {action.kind}"
-            )
-        if (
-            action.effect is Effect.WRITE
-            and action.operation_id not in self.config.policy.allowed_write_operations
-        ):
+            return PolicyDecision(allowed=False, reason=f"action kind is not allowed: {action.kind}")
+        if action.effect is Effect.WRITE and action.operation_id not in self.config.policy.allowed_write_operations:
             return PolicyDecision(
                 allowed=False,
                 reason=f"write operation is not explicitly allowed: {action.operation_id}",
@@ -40,9 +33,7 @@ class ActionPolicy:
             except ValueError as exc:
                 return PolicyDecision(allowed=False, reason=str(exc))
             if origin not in self.allowed_origins:
-                return PolicyDecision(
-                    allowed=False, reason=f"navigation origin is not allowed: {origin}"
-                )
+                return PolicyDecision(allowed=False, reason=f"navigation origin is not allowed: {origin}")
         return PolicyDecision(allowed=True, reason="allowed by project policy")
 
     def navigation_allowed(self, url: str) -> bool:

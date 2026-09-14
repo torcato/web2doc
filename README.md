@@ -1,6 +1,6 @@
 # web2doc
 
-`web2doc` records browser procedures and their evidence as the foundation for generating user documentation. Phase 1 is deterministic: the operator supplies a JSON procedure, and the same controlled execution path will later be used by an LLM planner.
+`web2doc` maps website states and records browser procedures with evidence as the foundation for generating user documentation. It supports deterministic supplied workflows and bounded feature discovery using either local heuristic ranking or a structured Pydantic AI planner.
 
 ## Development setup
 
@@ -32,13 +32,36 @@ Execute an explicit procedure:
 uv run web2doc run demo examples/procedure.json --role default
 ```
 
+Run bounded unguided discovery without a model provider:
+
+```bash
+uv run web2doc discover demo --role default --max-actions 20 --max-states 15
+```
+
+Use a Pydantic AI model after configuring its provider credentials:
+
+```bash
+uv run web2doc discover demo --role default --model openai:MODEL_NAME
+```
+
+Map a known procedure into the same state graph without calling a model:
+
+```bash
+uv run web2doc discover demo \
+  --role default \
+  --mode supplied \
+  --procedure examples/procedure.json
+```
+
 Inspect or recover runs:
 
 ```bash
 uv run web2doc status demo RUN_ID
 uv run web2doc recover demo
 uv run web2doc cancel demo RUN_ID
+uv run web2doc discovery-report demo RUN_ID
 ```
 
 The runtime data lives below `PROJECT/.web2doc/`. Authentication state and traces are private artifacts and must not be published.
 
+Discovery is not universally read-only: a button can have effects even when its label looks observational. Use disposable test data, explicit write-operation allowlists, and infrastructure-level network isolation.

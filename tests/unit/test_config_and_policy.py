@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from web2doc.config import initialize_project, load_project, origin_for
 from web2doc.domain.models import ClickAction, Effect, NavigateAction, Target
 from web2doc.policy.actions import ActionPolicy
+from web2doc.settings import RuntimeSettings
 
 
 def test_initialize_and_load_project(tmp_path: Path) -> None:
@@ -82,3 +83,13 @@ def test_generated_toml_quotes_untrusted_values(tmp_path: Path) -> None:
     raw = path.read_text(encoding="utf-8")
     assert json.dumps('name"\nvalue') in raw
     assert load_project(path.parent).name == 'name"\nvalue'
+
+
+def test_runtime_settings_use_namespaced_environment(monkeypatch) -> None:
+    monkeypatch.setenv("WEB2DOC_BROWSER_CHANNEL", "chrome")
+    monkeypatch.setenv("WEB2DOC_BROWSER_SLOW_MO_MS", "25")
+
+    settings = RuntimeSettings()
+
+    assert settings.browser_channel == "chrome"
+    assert settings.browser_slow_mo_ms == 25

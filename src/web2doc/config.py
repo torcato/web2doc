@@ -39,10 +39,7 @@ def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:
     if project_file.exists():
         raise FileExistsError(f"project already exists: {project_file}")
     origin = origin_for(base_url)
-    quoted = {
-        key: json.dumps(value)
-        for key, value in {"name": name, "url": base_url, "origin": origin}.items()
-    }
+    quoted = {key: json.dumps(value) for key, value in {"name": name, "url": base_url, "origin": origin}.items()}
     project_file.write_text(
         "\n".join(
             [
@@ -58,6 +55,26 @@ def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:
                 'allowed_actions = ["navigate", "click", "fill", "select", "press", "scroll", "wait"]',
                 "allowed_write_operations = []",
                 "supporting_origins = []",
+                "",
+                "[discovery]",
+                'scenario = "default"',
+                'ignored_query_parameters = ["_", "cache_bust", "cacheBust", "nonce", "timestamp", "ts"]',
+                "volatile_patterns = [",
+                "  '\\b\\d{4}-\\d{2}-\\d{2}[T ][0-9:.+Z-]+\\b',",
+                "  '\\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\\b',",
+                "]",
+                "",
+                "[discovery.limits]",
+                "max_actions = 200",
+                "max_states = 100",
+                "max_depth = 12",
+                "max_duration_seconds = 1800",
+                "max_model_calls = 100",
+                "max_output_tokens = 100000",
+                "max_tokens_per_call = 2000",
+                "max_candidates_per_state = 20",
+                "max_visits_per_state = 3",
+                "model_retries = 2",
                 "",
             ]
         ),
