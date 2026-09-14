@@ -1,0 +1,16 @@
+{
+  "name": "Open the example home page",
+  "actions": [
+    {
+      "kind": "navigate",
+      "description": "Open the home page",
+      "url": "http://127.0.0.1:8000/"
+    },
+    {
+      "kind": "wait",
+      "description": "Wait for the page heading",
+      "text": "Example"
+    }
+  ]
+}
+

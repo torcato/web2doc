@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from web2doc.browser.playwright import PlaywrightBrowser
+from web2doc.config import RUNTIME_DIR, initialize_project, load_procedure, load_project
+from web2doc.domain.models import ProjectConfig
+from web2doc.orchestration.runner import ProcedureRunner
+from web2doc.policy.actions import ActionPolicy
+from web2doc.storage.artifacts import ArtifactStore
+from web2doc.storage.database import upgrade_database
+from web2doc.storage.repository import Repository
+
+app = typer.Typer(no_args_is_help=True, help="Capture evidence-backed website procedures.")
+
+
+def _open_project(
+    project_dir: Path,
+) -> tuple[ProjectConfig, Repository, str, dict[str, str]]:
+    root = project_dir.resolve()
+    config = load_project(root)
+    database = root / RUNTIME_DIR / "state.sqlite3"
+    upgrade_database(database)
+    repository = Repository(database)
+    project_id, roles = repository.register_project(root, config)
+    return config, repository, project_id, roles
+
+
+@app.command()
+def init(
+    name: Annotated[str, typer.Argument(help="Project name")],
+    base_url: Annotated[str, typer.Option("--base-url", help="Initial website URL")],
+    path: Annotated[Path, typer.Option("--path", help="Directory to create")] = Path("."),
+) -> None:
+    project_file = initialize_project(path, name, base_url)
+    config, repository, _project_id, _roles = _open_project(path)
+    repository.close()
+    typer.echo(f"Created {config.name}: {project_file}")
+
+
+@app.command("run")
+def run_procedure(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    procedure_path: Annotated[Path, typer.Argument(help="JSON procedure")],
+    role: Annotated[str, typer.Option("--role")] = "default",
+    headed: Annotated[bool, typer.Option("--headed")] = False,
+) -> None:
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        role_config = config.role(role)
+        role_id = roles[role]
+        procedure = load_procedure(procedure_path)
+        browser = PlaywrightBrowser(
+            project_root=project_dir,
+            config=config,
+            role=role_config,
+        )
+        runner = ProcedureRunner(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            browser=browser,
+            policy=ActionPolicy(config),
+            project_id=project_id,
+            role_id=role_id,
+        )
+        run_id = asyncio.run(runner.run(procedure, headed=headed))
+        typer.echo(json.dumps(repository.run_summary(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command()
+def status(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Argument(help="Run identifier")],
+) -> None:
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        typer.echo(json.dumps(repository.run_summary(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command()
+def cancel(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Argument(help="Run identifier")],
+) -> None:
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        repository.request_cancel(run_id)
+        typer.echo(f"Cancellation recorded for {run_id}")
+    finally:
+        repository.close()
+
+
+@app.command()
+def recover(project_dir: Annotated[Path, typer.Argument(help="Project directory")]) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        typer.echo(json.dumps(repository.recover_interrupted(project_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("auth-login")
+def auth_login(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    role: Annotated[str, typer.Option("--role")] = "default",
+) -> None:
+    async def capture() -> Path:
+        config = load_project(project_dir)
+        browser = PlaywrightBrowser(
+            project_root=project_dir,
+            config=config,
+            role=config.role(role),
+        )
+        session = await browser.start(run_id=f"auth-{role}", headed=True)
+        try:
+            await session.page.goto(str(config.base_url), wait_until="domcontentloaded")
+            await asyncio.to_thread(
+                typer.prompt,
+                "Complete login in the browser, then press Enter",
+                default="",
+                show_default=False,
+            )
+            return await browser.save_authentication(session)
+        finally:
+            await browser.close(session)
+
+    path = asyncio.run(capture())
+    typer.echo(f"Saved authentication state to {path}")
+
+
+if __name__ == "__main__":
+    app()
