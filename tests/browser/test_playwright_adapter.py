@@ -35,6 +35,198 @@ from web2doc.policy.actions import ActionPolicy
 from web2doc.storage.artifacts import ArtifactStore
 from web2doc.storage.database import upgrade_database
 from web2doc.storage.repository import Repository
+from web2doc.verification.environment import HttpJsonEnvironmentAdapter
+from web2doc.verification.models import (
+    EnvironmentJsonPredicate,
+    TitlePredicate,
+    UrlPredicate,
+    VisibleTextPredicate,
+    WorkflowDefinition,
+    WorkflowStep,
+)
+from web2doc.verification.runner import VerificationRunner
+
+
+def benchmark_workflows(site_url: str) -> list[WorkflowDefinition]:
+    seed = {"seed": "Seed item"}
+    return [
+        WorkflowDefinition(
+            workflow_key="view-items",
+            title="View items",
+            goal="Open the item list",
+            role="admin",
+            steps=[WorkflowStep(action=NavigateAction(description="Open items", url=f"{site_url}/"))],
+            final_outcomes=[TitlePredicate(expected="Fixture")],
+        ),
+        WorkflowDefinition(
+            workflow_key="create-item",
+            title="Create item",
+            goal="Persist a new item",
+            role="admin",
+            test_inputs={"name": "Benchmark item"},
+            steps=[
+                WorkflowStep(
+                    action=FillAction(description="Enter name", target=Target(label="Item name"), value="{{name}}")
+                ),
+                WorkflowStep(
+                    action=ClickAction(
+                        description="Create",
+                        effect="write",
+                        operation_id="create-item",
+                        target=Target(role="button", name="Create"),
+                    ),
+                    expected=[EnvironmentJsonPredicate(path="items", operator="contains", expected="Benchmark item")],
+                ),
+            ],
+            final_outcomes=[TitlePredicate(expected="Created")],
+        ),
+        WorkflowDefinition(
+            workflow_key="validation-error",
+            title="See validation error",
+            goal="Reject an empty required name",
+            role="admin",
+            steps=[
+                WorkflowStep(action=NavigateAction(description="Open validation", url=f"{site_url}/validation")),
+                WorkflowStep(
+                    action=ClickAction(
+                        description="Validate empty form",
+                        effect="write",
+                        operation_id="validate-item",
+                        target=Target(role="button", name="Validate"),
+                    ),
+                    expected=[VisibleTextPredicate(text="Name is required")],
+                ),
+            ],
+            final_outcomes=[EnvironmentJsonPredicate(path="items", expected=[])],
+        ),
+        WorkflowDefinition(
+            workflow_key="edit-item",
+            title="Edit item",
+            goal="Change an existing item",
+            role="admin",
+            scenario="existing-item",
+            test_inputs={**seed, "updated": "Updated item"},
+            steps=[
+                WorkflowStep(action=NavigateAction(description="Open edit form", url=f"{site_url}/items/edit")),
+                WorkflowStep(
+                    action=FillAction(description="Change name", target=Target(label="Item name"), value="{{updated}}")
+                ),
+                WorkflowStep(
+                    action=ClickAction(
+                        description="Save",
+                        effect="write",
+                        operation_id="edit-item",
+                        target=Target(role="button", name="Save"),
+                    ),
+                    expected=[EnvironmentJsonPredicate(path="items", operator="contains", expected="Updated item")],
+                ),
+            ],
+            final_outcomes=[TitlePredicate(expected="Updated")],
+        ),
+        WorkflowDefinition(
+            workflow_key="delete-item",
+            title="Delete item",
+            goal="Delete an existing item",
+            role="admin",
+            scenario="existing-item",
+            test_inputs=seed,
+            steps=[
+                WorkflowStep(action=NavigateAction(description="Open delete form", url=f"{site_url}/items/delete")),
+                WorkflowStep(
+                    action=ClickAction(
+                        description="Delete",
+                        effect="write",
+                        operation_id="delete-item",
+                        target=Target(role="button", name="Delete"),
+                    ),
+                    expected=[EnvironmentJsonPredicate(path="items", expected=[])],
+                ),
+            ],
+            final_outcomes=[TitlePredicate(expected="Deleted")],
+        ),
+        WorkflowDefinition(
+            workflow_key="search-items",
+            title="Search items",
+            goal="Find a seeded item",
+            role="admin",
+            scenario="existing-item",
+            test_inputs=seed,
+            steps=[
+                WorkflowStep(
+                    action=NavigateAction(description="Search", url=f"{site_url}/search?q=Seed"),
+                    expected=[VisibleTextPredicate(text="Seed item")],
+                )
+            ],
+            final_outcomes=[UrlPredicate(expected="/search", match="path")],
+        ),
+        WorkflowDefinition(
+            workflow_key="open-dialog",
+            title="Open dialog",
+            goal="Open the help dialog",
+            role="admin",
+            steps=[
+                WorkflowStep(action=NavigateAction(description="Open page", url=f"{site_url}/dialog")),
+                WorkflowStep(
+                    action=ClickAction(description="Open help", target=Target(role="button", name="Open help")),
+                    expected=[VisibleTextPredicate(text="Dialog content")],
+                ),
+            ],
+            final_outcomes=[TitlePredicate(expected="Dialog")],
+        ),
+        WorkflowDefinition(
+            workflow_key="select-tab",
+            title="Select settings tab",
+            goal="Show settings",
+            role="admin",
+            steps=[
+                WorkflowStep(action=NavigateAction(description="Open tabs", url=f"{site_url}/tabs")),
+                WorkflowStep(
+                    action=ClickAction(description="Select settings", target=Target(role="tab", name="Settings")),
+                    expected=[VisibleTextPredicate(text="Settings panel")],
+                ),
+            ],
+            final_outcomes=[TitlePredicate(expected="Tabs")],
+        ),
+        WorkflowDefinition(
+            workflow_key="access-denied",
+            title="Reject anonymous admin access",
+            goal="Confirm restricted access",
+            role="admin",
+            steps=[
+                WorkflowStep(
+                    action=NavigateAction(description="Open admin", url=f"{site_url}/admin"),
+                    expected=[VisibleTextPredicate(text="Access denied")],
+                )
+            ],
+            final_outcomes=[TitlePredicate(expected="Access denied")],
+        ),
+        WorkflowDefinition(
+            workflow_key="failed-save",
+            title="Report failed save",
+            goal="Confirm a failed save does not persist data",
+            role="admin",
+            scenario="save-failure",
+            test_inputs={"name": "Must not persist"},
+            steps=[
+                WorkflowStep(
+                    action=FillAction(description="Enter name", target=Target(label="Item name"), value="{{name}}")
+                ),
+                WorkflowStep(
+                    action=ClickAction(
+                        description="Try save",
+                        effect="write",
+                        operation_id="create-item",
+                        target=Target(role="button", name="Create"),
+                    ),
+                    expected=[
+                        VisibleTextPredicate(text="Save failed"),
+                        EnvironmentJsonPredicate(path="items", expected=[]),
+                    ],
+                ),
+            ],
+            final_outcomes=[EnvironmentJsonPredicate(path="items", expected=[])],
+        ),
+    ]
 
 
 def unused_port() -> int:
@@ -221,6 +413,121 @@ async def test_real_browser_runner_persists_evidence(tmp_path: Path, site_url: s
         assert (tmp_path / f".web2doc/private/traces/{run_id}.zip").is_file()
         async with httpx.AsyncClient() as client:
             assert (await client.get(f"{site_url}/__state")).json() == {"items": ["Persisted item"]}
+    finally:
+        repository.close()
+
+
+@pytest.mark.browser
+@pytest.mark.asyncio
+async def test_real_browser_verifies_workflow_outcomes_and_resets_fixture(tmp_path: Path, site_url: str) -> None:
+    config = ProjectConfig(
+        name="verification",
+        base_url=site_url,
+        allowed_origins={site_url},
+        roles=[RoleConfig(name="admin")],
+        policy=PolicyConfig(allowed_write_operations={"create-item"}),
+    )
+    database = tmp_path / ".web2doc/state.sqlite3"
+    upgrade_database(database)
+    repository = Repository(database)
+    project_id, roles = repository.register_project(tmp_path, config)
+    definition = WorkflowDefinition(
+        workflow_key="create-item",
+        title="Create an item",
+        goal="Create an item and confirm its persisted state",
+        role="admin",
+        test_inputs={"name": "Verified item"},
+        steps=[
+            WorkflowStep(
+                action=FillAction(
+                    description="Enter item name",
+                    target=Target(label="Item name"),
+                    value="{{name}}",
+                )
+            ),
+            WorkflowStep(
+                action=ClickAction(
+                    description="Create item",
+                    effect="write",
+                    operation_id="create-item",
+                    target=Target(role="button", name="Create"),
+                ),
+                expected=[
+                    VisibleTextPredicate(text="Verified item"),
+                    EnvironmentJsonPredicate(path="items", operator="contains", expected="Verified item"),
+                ],
+            ),
+        ],
+        final_outcomes=[TitlePredicate(expected="Created")],
+    )
+    revision = repository.add_workflow_revision(
+        project_id=project_id,
+        role_id=roles["admin"],
+        definition=definition,
+    )
+    runner = VerificationRunner(
+        repository=repository,
+        artifacts=ArtifactStore(tmp_path / ".web2doc"),
+        browser=PlaywrightBrowser(project_root=tmp_path, config=config, role=config.role("admin")),
+        policy=ActionPolicy(config),
+        environment=HttpJsonEnvironmentAdapter(base_url=site_url, allowed_origins={site_url}),
+        project_id=project_id,
+        role_id=roles["admin"],
+        role_name="admin",
+        base_url=site_url,
+    )
+    try:
+        verification_id = await runner.run(revision)
+        report = repository.verification_report(verification_id)
+        assert report["status"] == "passed"
+        assert {result["status"] for result in report["predicates"]} == {"passed"}
+        async with httpx.AsyncClient() as client:
+            assert (await client.get(f"{site_url}/__state")).json() == {"items": []}
+    finally:
+        repository.close()
+
+
+@pytest.mark.browser
+@pytest.mark.asyncio
+async def test_ten_workflow_benchmark_replays_three_times(tmp_path: Path, site_url: str) -> None:
+    config = ProjectConfig(
+        name="benchmark",
+        base_url=site_url,
+        allowed_origins={site_url},
+        roles=[RoleConfig(name="admin")],
+        policy=PolicyConfig(allowed_write_operations={"create-item", "validate-item", "edit-item", "delete-item"}),
+    )
+    database = tmp_path / ".web2doc/state.sqlite3"
+    upgrade_database(database)
+    repository = Repository(database)
+    project_id, roles = repository.register_project(tmp_path, config)
+    try:
+        revisions = [
+            repository.add_workflow_revision(
+                project_id=project_id,
+                role_id=roles["admin"],
+                definition=definition,
+            )
+            for definition in benchmark_workflows(site_url)
+        ]
+        results: list[str] = []
+        for _repeat in range(3):
+            for revision in revisions:
+                runner = VerificationRunner(
+                    repository=repository,
+                    artifacts=ArtifactStore(tmp_path / ".web2doc"),
+                    browser=PlaywrightBrowser(project_root=tmp_path, config=config, role=config.role("admin")),
+                    policy=ActionPolicy(config),
+                    environment=HttpJsonEnvironmentAdapter(base_url=site_url, allowed_origins={site_url}),
+                    project_id=project_id,
+                    role_id=roles["admin"],
+                    role_name="admin",
+                    base_url=site_url,
+                )
+                verification_id = await runner.run(revision)
+                results.append(str(repository.verification_report(verification_id)["status"]))
+        assert len(results) == 30
+        assert set(results) == {"passed"}
     finally:
         repository.close()
 

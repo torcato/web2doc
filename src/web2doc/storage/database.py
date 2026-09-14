@@ -198,6 +198,93 @@ class UsageEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class WorkflowRow(Base):
+    __tablename__ = "workflows"
+    __table_args__ = (UniqueConstraint("project_id", "workflow_key", name="uq_workflow_project_key"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    workflow_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowRevisionRow(Base):
+    __tablename__ = "workflow_revisions"
+    __table_args__ = (
+        UniqueConstraint("workflow_id", "version", name="uq_workflow_revision_version"),
+        UniqueConstraint("workflow_id", "content_hash", name="uq_workflow_revision_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
+    role_id: Mapped[str] = mapped_column(ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(ForeignKey("workflow_revisions.id", ondelete="SET NULL"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowStepRow(Base):
+    __tablename__ = "workflow_steps"
+    __table_args__ = (UniqueConstraint("revision_id", "sequence", name="uq_workflow_step_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("workflow_revisions.id", ondelete="CASCADE"), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    action_json: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class FixtureReceiptRow(Base):
+    __tablename__ = "fixture_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    adapter_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    scenario: Mapped[str] = mapped_column(String(100), nullable=False)
+    application_version: Mapped[str | None] = mapped_column(String(100))
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    prepared_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VerificationRow(Base):
+    __tablename__ = "verifications"
+    __table_args__ = (UniqueConstraint("run_id", name="uq_verification_run"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_revisions.id", ondelete="RESTRICT"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    fixture_receipt_id: Mapped[str | None] = mapped_column(ForeignKey("fixture_receipts.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PredicateResultRow(Base):
+    __tablename__ = "predicate_results"
+    __table_args__ = (
+        UniqueConstraint("verification_id", "phase", "step_sequence", "predicate_index", name="uq_predicate_result"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    verification_id: Mapped[str] = mapped_column(ForeignKey("verifications.id", ondelete="CASCADE"), nullable=False)
+    phase: Mapped[str] = mapped_column(String(30), nullable=False)
+    step_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    predicate_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    predicate_json: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_json: Mapped[str] = mapped_column(Text, nullable=False)
+    observation_id: Mapped[str | None] = mapped_column(ForeignKey("observations.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def make_engine(database_path: Path) -> Engine:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{database_path}")

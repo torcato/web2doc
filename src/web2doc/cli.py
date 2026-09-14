@@ -8,7 +8,7 @@ from typing import Annotated
 import typer
 
 from web2doc.browser.playwright import PlaywrightBrowser
-from web2doc.config import RUNTIME_DIR, initialize_project, load_procedure, load_project
+from web2doc.config import RUNTIME_DIR, initialize_project, load_procedure, load_project, load_workflow
 from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
 from web2doc.discovery.runner import ExplorationRunner
 from web2doc.domain.models import DiscoveryMode, ProjectConfig
@@ -18,6 +18,9 @@ from web2doc.settings import RuntimeSettings
 from web2doc.storage.artifacts import ArtifactStore
 from web2doc.storage.database import upgrade_database
 from web2doc.storage.repository import ProjectBusyError, Repository
+from web2doc.verification.builder import draft_workflows
+from web2doc.verification.environment import HttpJsonEnvironmentAdapter
+from web2doc.verification.runner import VerificationRunner
 
 app = typer.Typer(no_args_is_help=True, help="Capture evidence-backed website procedures.")
 
@@ -153,6 +156,95 @@ def discovery_report(
     _config, repository, _project_id, _roles = _open_project(project_dir)
     try:
         typer.echo(json.dumps(repository.discovery_report(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("workflow-add")
+def workflow_add(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    workflow_path: Annotated[Path, typer.Argument(help="JSON workflow definition")],
+) -> None:
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        definition = load_workflow(workflow_path)
+        config.role(definition.role)
+        revision = repository.add_workflow_revision(
+            project_id=project_id,
+            role_id=roles[definition.role],
+            definition=definition,
+        )
+        typer.echo(revision.model_dump_json(indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("workflow-draft")
+def workflow_draft(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    discovery_run_id: Annotated[str, typer.Argument(help="Completed discovery run identifier")],
+    role: Annotated[str, typer.Option("--role")] = "default",
+) -> None:
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        config.role(role)
+        revisions = [
+            repository.add_workflow_revision(
+                project_id=project_id,
+                role_id=roles[role],
+                definition=definition,
+            )
+            for definition in draft_workflows(repository, discovery_run_id=discovery_run_id, role=role)
+        ]
+        typer.echo(json.dumps([revision.model_dump(mode="json") for revision in revisions], indent=2))
+    finally:
+        repository.close()
+
+
+@app.command()
+def verify(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    revision_id: Annotated[str, typer.Argument(help="Immutable workflow revision identifier")],
+    trusted_fixture_api: Annotated[
+        bool,
+        typer.Option("--trusted-fixture-api", help="Use same-origin /__prepare, /__state and /__reset endpoints"),
+    ] = False,
+    headed: Annotated[bool, typer.Option("--headed")] = False,
+) -> None:
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        revision = repository.get_workflow_revision(revision_id)
+        role = revision.definition.role
+        environment = (
+            HttpJsonEnvironmentAdapter(base_url=str(config.base_url), allowed_origins=config.allowed_origins)
+            if trusted_fixture_api
+            else None
+        )
+        runner = VerificationRunner(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            browser=PlaywrightBrowser(project_root=project_dir, config=config, role=config.role(role)),
+            policy=ActionPolicy(config),
+            environment=environment,
+            project_id=project_id,
+            role_id=roles[role],
+            role_name=role,
+            base_url=str(config.base_url),
+        )
+        verification_id = asyncio.run(runner.run(revision, headed=headed))
+        typer.echo(json.dumps(repository.verification_report(verification_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("verification-report")
+def verification_report(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    verification_id: Annotated[str, typer.Argument(help="Verification identifier")],
+) -> None:
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        typer.echo(json.dumps(repository.verification_report(verification_id), indent=2))
     finally:
         repository.close()
 

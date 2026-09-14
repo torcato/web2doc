@@ -246,16 +246,16 @@ Convert discoveries into repeatable user procedures and verify their actual outc
 
 ### Implementation tasks
 
-- [ ] Group observations into candidate user goals and workflow revisions.
-- [ ] Record role, prerequisites, test inputs, ordered steps, and unresolved questions.
-- [ ] Serialize semantic locators instead of temporary browser element references.
-- [ ] Complete fixture support for all ten benchmark workflows, including negative cases.
-- [ ] Add trusted fixture preparation/reset adapters and track fixture receipts.
-- [ ] Implement replay from known starting conditions.
-- [ ] Define explicit step and final-outcome predicates.
-- [ ] Record verification as passed, failed, or inconclusive against an exact workflow revision.
-- [ ] Check outcomes before retrying an action with uncertain effects.
-- [ ] Capture evidence from verified executions for documentation generation.
+- [x] Group observations into candidate user goals and workflow revisions.
+- [x] Record role, prerequisites, test inputs, ordered steps, and unresolved questions.
+- [x] Serialize semantic locators instead of temporary browser element references.
+- [x] Complete fixture support for all ten benchmark workflows, including negative cases.
+- [x] Add trusted fixture preparation/reset adapters and track fixture receipts.
+- [x] Implement replay from known starting conditions.
+- [x] Define explicit step and final-outcome predicates.
+- [x] Record verification as passed, failed, or inconclusive against an exact workflow revision.
+- [x] Check outcomes before retrying an action with uncertain effects.
+- [x] Capture evidence from verified executions for documentation generation.
 
 ### Deliverables
 
@@ -272,6 +272,8 @@ A workflow catalog, a replay command, verification reports, and evidence for eac
 - Target at least 8/10 workflows for live discovery-to-verification on the frozen fixture suite; retain failures and inconclusive results in reporting.
 
 Completion of this phase is the **technical prototype milestone**.
+
+Core implementation and deterministic local acceptance are complete. The technical prototype is usable; the separate live-model 8/10 discovery-to-verification quality gate remains pending and is not represented as passed.
 
 ## Phase 4 — Documentation generation and review
 

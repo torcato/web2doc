@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from pydantic import TypeAdapter
 
 from web2doc.domain.models import Procedure, ProjectConfig
+from web2doc.verification.models import WorkflowDefinition
 
 PROJECT_FILE = "project.toml"
 RUNTIME_DIR = ".web2doc"
@@ -31,6 +32,10 @@ def load_project(project_dir: Path) -> ProjectConfig:
 
 def load_procedure(path: Path) -> Procedure:
     return TypeAdapter(Procedure).validate_json(path.read_bytes())
+
+
+def load_workflow(path: Path) -> WorkflowDefinition:
+    return TypeAdapter(WorkflowDefinition).validate_json(path.read_bytes())
 
 
 def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:

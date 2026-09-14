@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
+from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -27,8 +29,10 @@ from web2doc.storage.database import (
     ActionAttemptRow,
     ArtifactRow,
     FeatureRow,
+    FixtureReceiptRow,
     FrontierItemRow,
     ObservationRow,
+    PredicateResultRow,
     ProjectLockRow,
     ProjectRow,
     RoleRow,
@@ -36,7 +40,19 @@ from web2doc.storage.database import (
     StateRow,
     TransitionRow,
     UsageEventRow,
+    VerificationRow,
+    WorkflowRevisionRow,
+    WorkflowRow,
+    WorkflowStepRow,
     make_engine,
+)
+from web2doc.verification.models import (
+    FixtureReceiptDraft,
+    OutcomePredicate,
+    PredicateResultDraft,
+    VerificationStatus,
+    WorkflowDefinition,
+    WorkflowRevision,
 )
 
 
@@ -467,6 +483,255 @@ class Repository:
                 )
             )
 
+    def add_workflow_revision(
+        self,
+        *,
+        project_id: str,
+        role_id: str,
+        definition: WorkflowDefinition,
+    ) -> WorkflowRevision:
+        dumped = definition.model_dump(mode="json")
+        canonical = json.dumps(dumped, sort_keys=True, separators=(",", ":"))
+        hashable = definition.model_dump(mode="json")
+        for step in hashable["steps"]:
+            step["action"].pop("id", None)
+        content_hash = sha256(json.dumps(hashable, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with self.sessions.begin() as session:
+            workflow = session.scalar(
+                select(WorkflowRow).where(
+                    WorkflowRow.project_id == project_id,
+                    WorkflowRow.workflow_key == definition.workflow_key,
+                )
+            )
+            if workflow is None:
+                workflow = WorkflowRow(
+                    id=new_id(),
+                    project_id=project_id,
+                    workflow_key=definition.workflow_key,
+                    title=definition.title,
+                    created_at=utc_now(),
+                )
+                session.add(workflow)
+                session.flush()
+            else:
+                workflow.title = definition.title
+            existing = session.scalar(
+                select(WorkflowRevisionRow).where(
+                    WorkflowRevisionRow.workflow_id == workflow.id,
+                    WorkflowRevisionRow.content_hash == content_hash,
+                )
+            )
+            if existing is not None:
+                return WorkflowRevision(
+                    id=existing.id,
+                    workflow_id=workflow.id,
+                    version=existing.version,
+                    content_hash=existing.content_hash,
+                    definition=WorkflowDefinition.model_validate_json(existing.definition_json),
+                )
+            latest = session.scalar(
+                select(WorkflowRevisionRow)
+                .where(WorkflowRevisionRow.workflow_id == workflow.id)
+                .order_by(WorkflowRevisionRow.version.desc())
+                .limit(1)
+            )
+            revision = WorkflowRevisionRow(
+                id=new_id(),
+                workflow_id=workflow.id,
+                role_id=role_id,
+                parent_revision_id=latest.id if latest is not None else None,
+                version=(latest.version + 1) if latest is not None else 1,
+                content_hash=content_hash,
+                definition_json=canonical,
+                created_at=utc_now(),
+            )
+            session.add(revision)
+            session.flush()
+            for sequence, step in enumerate(definition.steps, start=1):
+                session.add(
+                    WorkflowStepRow(
+                        id=new_id(),
+                        revision_id=revision.id,
+                        sequence=sequence,
+                        action_json=step.action.model_dump_json(),
+                        expected_json=json.dumps(
+                            [item.model_dump(mode="json") for item in step.expected],
+                            sort_keys=True,
+                        ),
+                    )
+                )
+            return WorkflowRevision(
+                id=revision.id,
+                workflow_id=workflow.id,
+                version=revision.version,
+                content_hash=content_hash,
+                definition=definition,
+            )
+
+    def get_workflow_revision(self, revision_id: str) -> WorkflowRevision:
+        with self.sessions() as session:
+            row = session.get(WorkflowRevisionRow, revision_id)
+            if row is None:
+                raise KeyError(f"workflow revision not found: {revision_id}")
+            return WorkflowRevision(
+                id=row.id,
+                workflow_id=row.workflow_id,
+                version=row.version,
+                content_hash=row.content_hash,
+                definition=WorkflowDefinition.model_validate_json(row.definition_json),
+            )
+
+    def add_fixture_receipt(self, project_id: str, draft: FixtureReceiptDraft) -> FixtureReceiptRow:
+        row = FixtureReceiptRow(
+            id=new_id(),
+            project_id=project_id,
+            adapter_name=draft.adapter_name,
+            scenario=draft.scenario,
+            application_version=draft.application_version,
+            payload_json=json.dumps(draft.payload, sort_keys=True),
+            prepared_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def mark_fixture_reset(self, receipt_id: str) -> None:
+        with self.sessions.begin() as session:
+            row = session.get(FixtureReceiptRow, receipt_id)
+            if row is None:
+                raise KeyError(f"fixture receipt not found: {receipt_id}")
+            row.reset_at = utc_now()
+
+    def create_verification(
+        self, workflow_revision_id: str, run_id: str, fixture_receipt_id: str | None
+    ) -> VerificationRow:
+        row = VerificationRow(
+            id=new_id(),
+            workflow_revision_id=workflow_revision_id,
+            run_id=run_id,
+            fixture_receipt_id=fixture_receipt_id,
+            status=VerificationStatus.RUNNING,
+            started_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def set_verification_status(
+        self, verification_id: str, status: VerificationStatus, reason: str | None = None
+    ) -> None:
+        with self.sessions.begin() as session:
+            row = session.get(VerificationRow, verification_id)
+            if row is None:
+                raise KeyError(f"verification not found: {verification_id}")
+            row.status = status
+            row.reason = reason
+            if status in {VerificationStatus.PASSED, VerificationStatus.FAILED, VerificationStatus.INCONCLUSIVE}:
+                row.completed_at = utc_now()
+
+    def add_predicate_result(
+        self,
+        *,
+        verification_id: str,
+        phase: str,
+        step_sequence: int,
+        predicate_index: int,
+        predicate: OutcomePredicate,
+        result: PredicateResultDraft,
+        observation_id: str | None,
+    ) -> PredicateResultRow:
+        row = PredicateResultRow(
+            id=new_id(),
+            verification_id=verification_id,
+            phase=phase,
+            step_sequence=step_sequence,
+            predicate_index=predicate_index,
+            predicate_json=predicate.model_dump_json(),
+            status=result.status,
+            message=result.message,
+            observed_json=json.dumps(result.observed, sort_keys=True),
+            observation_id=observation_id,
+            created_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def verification_report(self, verification_id: str) -> dict[str, object]:
+        with self.sessions() as session:
+            verification = session.get(VerificationRow, verification_id)
+            if verification is None:
+                raise KeyError(f"verification not found: {verification_id}")
+            results = tuple(
+                session.scalars(
+                    select(PredicateResultRow)
+                    .where(PredicateResultRow.verification_id == verification_id)
+                    .order_by(
+                        PredicateResultRow.step_sequence,
+                        PredicateResultRow.phase,
+                        PredicateResultRow.predicate_index,
+                    )
+                )
+            )
+            return {
+                "id": verification.id,
+                "run_id": verification.run_id,
+                "workflow_revision_id": verification.workflow_revision_id,
+                "status": verification.status,
+                "reason": verification.reason,
+                "fixture_receipt_id": verification.fixture_receipt_id,
+                "predicates": [
+                    {
+                        "phase": row.phase,
+                        "step": row.step_sequence,
+                        "status": row.status,
+                        "message": row.message,
+                        "observed": json.loads(row.observed_json),
+                        "observation_id": row.observation_id,
+                    }
+                    for row in results
+                ],
+            }
+
+    def reconciliation_receipt(self, workflow_revision_id: str) -> tuple[str, FixtureReceiptDraft] | None:
+        with self.sessions() as session:
+            receipt = session.scalar(
+                select(FixtureReceiptRow)
+                .join(VerificationRow, VerificationRow.fixture_receipt_id == FixtureReceiptRow.id)
+                .join(RunRow, RunRow.id == VerificationRow.run_id)
+                .join(ActionAttemptRow, ActionAttemptRow.run_id == RunRow.id)
+                .where(
+                    VerificationRow.workflow_revision_id == workflow_revision_id,
+                    ActionAttemptRow.status == AttemptStatus.UNCERTAIN,
+                    FixtureReceiptRow.reset_at.is_(None),
+                )
+                .order_by(FixtureReceiptRow.prepared_at.desc())
+                .limit(1)
+            )
+            if receipt is None:
+                return None
+            return receipt.id, FixtureReceiptDraft(
+                adapter_name=receipt.adapter_name,
+                scenario=receipt.scenario,
+                application_version=receipt.application_version,
+                payload=json.loads(receipt.payload_json),
+            )
+
+    def uncertain_attempt_for_revision(self, workflow_revision_id: str, sequence: int) -> ActionAttemptRow | None:
+        with self.sessions() as session:
+            return session.scalar(
+                select(ActionAttemptRow)
+                .join(RunRow, RunRow.id == ActionAttemptRow.run_id)
+                .join(VerificationRow, VerificationRow.run_id == RunRow.id)
+                .where(
+                    VerificationRow.workflow_revision_id == workflow_revision_id,
+                    ActionAttemptRow.sequence == sequence,
+                    ActionAttemptRow.status == AttemptStatus.UNCERTAIN,
+                )
+                .order_by(ActionAttemptRow.created_at.desc())
+                .limit(1)
+            )
+
     def recover_interrupted(self, project_id: str) -> dict[str, int]:
         recovered_attempts = 0
         paused_runs = 0
@@ -627,3 +892,41 @@ class Repository:
                     if item.status != FrontierStatus.EXPLORED
                 ],
             }
+
+    def explored_workflow_candidates(self, run_id: str) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            items = tuple(
+                session.scalars(
+                    select(FrontierItemRow)
+                    .where(
+                        FrontierItemRow.run_id == run_id,
+                        FrontierItemRow.status == FrontierStatus.EXPLORED,
+                        FrontierItemRow.attempt_id.is_not(None),
+                    )
+                    .order_by(FrontierItemRow.created_at)
+                )
+            )
+            values: list[dict[str, Any]] = []
+            for item in items:
+                transition = session.scalar(select(TransitionRow).where(TransitionRow.attempt_id == item.attempt_id))
+                target = session.get(StateRow, transition.target_state_id) if transition else None
+                if target is None:
+                    continue
+                features = tuple(
+                    session.scalars(
+                        select(FeatureRow).where(
+                            FeatureRow.run_id == run_id,
+                            FeatureRow.state_id == target.id,
+                        )
+                    )
+                )
+                values.append(
+                    {
+                        "label": item.label,
+                        "path": json.loads(item.path_json),
+                        "action": json.loads(item.action_json),
+                        "target_route": target.route,
+                        "feature_ids": [feature.id for feature in features],
+                    }
+                )
+            return values

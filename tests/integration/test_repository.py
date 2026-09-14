@@ -32,6 +32,12 @@ def test_migration_creates_expected_schema(tmp_path: Path) -> None:
         "frontier_items",
         "features",
         "usage_events",
+        "workflows",
+        "workflow_revisions",
+        "workflow_steps",
+        "fixture_receipts",
+        "verifications",
+        "predicate_results",
     } <= tables
 
 
@@ -42,7 +48,7 @@ def test_migration_can_upgrade_the_same_database_twice(tmp_path: Path) -> None:
     upgrade_database(database)
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0002_phase2",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0003_phase3",)
 
 
 def test_phase_one_database_upgrades_without_losing_runs(tmp_path: Path, project_config) -> None:

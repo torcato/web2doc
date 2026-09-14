@@ -1,6 +1,6 @@
 # web2doc
 
-`web2doc` maps website states and records browser procedures with evidence as the foundation for generating user documentation. It supports deterministic supplied workflows and bounded feature discovery using either local heuristic ranking or a structured Pydantic AI planner.
+`web2doc` maps website states, constructs versioned workflows, and verifies browser procedures with evidence as the foundation for generating user documentation. It supports deterministic supplied workflows and bounded feature discovery using either local heuristic ranking or a structured Pydantic AI planner.
 
 ## Development setup
 
@@ -62,6 +62,22 @@ uv run web2doc cancel demo RUN_ID
 uv run web2doc discovery-report demo RUN_ID
 ```
 
+Draft workflow revisions from explored transitions, or import a reviewed workflow definition:
+
+```bash
+uv run web2doc workflow-draft demo DISCOVERY_RUN_ID --role default
+uv run web2doc workflow-add demo examples/workflow.json
+```
+
+Replay an exact revision. The optional trusted fixture adapter prepares/reset synthetic data and verifies backend state through fixed same-origin endpoints:
+
+```bash
+uv run web2doc verify demo REVISION_ID --trusted-fixture-api
+uv run web2doc verification-report demo VERIFICATION_ID
+```
+
 The runtime data lives below `PROJECT/.web2doc/`. Authentication state and traces are private artifacts and must not be published.
 
 Discovery is not universally read-only: a button can have effects even when its label looks observational. Use disposable test data, explicit write-operation allowlists, and infrastructure-level network isolation.
+
+Verification reports `passed`, `failed`, or `inconclusive`. A click completing is never treated as proof of its business outcome, and uncertain writes are not repeated until trusted state reconciliation can establish whether the prior effect occurred.

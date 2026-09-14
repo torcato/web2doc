@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14,<2",
+  "httpx>=0.28,<1",
   "playwright>=1.59,<2",
   "pydantic>=2.10,<3",
   "pydantic-ai-slim[openai]>=2.42,<3",
@@ -24,7 +25,6 @@ web2doc = "web2doc.cli:app"
 [dependency-groups]
 test = [
   "fastapi>=0.115,<1",
-  "httpx>=0.28,<1",
   "hypothesis>=6.120,<7",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.25,<2",

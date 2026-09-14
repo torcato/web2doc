@@ -34,6 +34,7 @@ class AttemptStatus(StrEnum):
     FAILED = "failed"
     UNCERTAIN = "uncertain"
     DENIED = "denied"
+    RECONCILED = "reconciled"
 
 
 class Effect(StrEnum):
