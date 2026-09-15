@@ -25,7 +25,7 @@ from web2doc.documentation.service import DocumentationService
 from web2doc.domain.models import DiscoveryMode, ProjectConfig
 from web2doc.orchestration.runner import ProcedureRunner
 from web2doc.policy.actions import ActionPolicy
-from web2doc.settings import RuntimeSettings
+from web2doc.settings import load_runtime_settings
 from web2doc.storage.artifacts import ArtifactStore
 from web2doc.storage.database import upgrade_database
 from web2doc.storage.repository import ProjectBusyError, Repository
@@ -76,6 +76,7 @@ def run_procedure(
             project_root=project_dir,
             config=config,
             role=role_config,
+            settings=load_runtime_settings(project_dir),
         )
         runner = ProcedureRunner(
             repository=repository,
@@ -116,8 +117,8 @@ def discover(
         if mode is DiscoveryMode.UNGUIDED and procedure_path is not None:
             raise typer.BadParameter("--procedure can only be used with --mode supplied")
         procedure = load_procedure(procedure_path) if procedure_path is not None else None
-        settings = RuntimeSettings()
-        selected_model = model or settings.llm_model
+        settings = load_runtime_settings(project_dir)
+        selected_model = settings.model_for_discovery(model)
         planner = PydanticAIPlanner(selected_model) if selected_model else HeuristicPlanner()
         overrides = {
             key: value
@@ -234,7 +235,12 @@ def verify(
         runner = VerificationRunner(
             repository=repository,
             artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
-            browser=PlaywrightBrowser(project_root=project_dir, config=config, role=config.role(role)),
+            browser=PlaywrightBrowser(
+                project_root=project_dir,
+                config=config,
+                role=config.role(role),
+                settings=load_runtime_settings(project_dir),
+            ),
             policy=ActionPolicy(config),
             environment=environment,
             project_id=project_id,
@@ -295,7 +301,7 @@ def document_generate(
 ) -> None:
     _config, repository, project_id, _roles = _open_project(project_dir)
     try:
-        selected_model = model or RuntimeSettings().llm_model
+        selected_model = load_runtime_settings(project_dir).model_for_documentation(model)
         composer = PydanticAIDocumentComposer(selected_model) if selected_model else DeterministicComposer()
         revision = asyncio.run(
             DocumentationService(repository, project_id).generate(
@@ -457,6 +463,7 @@ def auth_login(
             project_root=project_dir,
             config=config,
             role=config.role(role),
+            settings=load_runtime_settings(project_dir),
         )
         session = await browser.start(run_id=f"auth-{role}", headed=True)
         try:

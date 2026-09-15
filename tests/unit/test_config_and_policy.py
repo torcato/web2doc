@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from pydantic import ValidationError
 from web2doc.config import initialize_project, load_project, origin_for
 from web2doc.domain.models import ClickAction, Effect, NavigateAction, Target
 from web2doc.policy.actions import ActionPolicy
-from web2doc.settings import RuntimeSettings
+from web2doc.settings import RuntimeSettings, load_runtime_settings
 
 
 def test_initialize_and_load_project(tmp_path: Path) -> None:
@@ -93,3 +94,45 @@ def test_runtime_settings_use_namespaced_environment(monkeypatch) -> None:
 
     assert settings.browser_channel == "chrome"
     assert settings.browser_slow_mo_ms == 25
+
+
+def test_runtime_settings_select_purpose_specific_models(monkeypatch) -> None:
+    monkeypatch.setenv("WEB2DOC_LLM_MODEL", "openai:fallback")
+    monkeypatch.setenv("WEB2DOC_DISCOVERY_MODEL", "google-cloud:discovery")
+    monkeypatch.setenv("WEB2DOC_DOCUMENTATION_MODEL", "google-cloud:documentation")
+
+    settings = RuntimeSettings()
+
+    assert settings.model_for_discovery() == "google-cloud:discovery"
+    assert settings.model_for_documentation() == "google-cloud:documentation"
+    assert settings.model_for_discovery("openai:override") == "openai:override"
+
+
+def test_project_dotenv_overrides_working_tree_dotenv_but_not_process_environment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    working_tree = tmp_path / "working-tree"
+    project = working_tree / "project"
+    project.mkdir(parents=True)
+    (working_tree / ".env").write_text(
+        "WEB2DOC_DISCOVERY_MODEL=openai:working-tree\nUNRELATED_SECRET=not-loaded\n",
+        encoding="utf-8",
+    )
+    (project / ".env").write_text(
+        "WEB2DOC_DISCOVERY_MODEL=google-cloud:project\n"
+        "WEB2DOC_DOCUMENTATION_MODEL=google-cloud:documentation\n"
+        "GOOGLE_CLOUD_PROJECT=dotenv-project\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(working_tree)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "process-project")
+    monkeypatch.delenv("WEB2DOC_DISCOVERY_MODEL", raising=False)
+    monkeypatch.delenv("WEB2DOC_DOCUMENTATION_MODEL", raising=False)
+    monkeypatch.delenv("UNRELATED_SECRET", raising=False)
+
+    settings = load_runtime_settings(project)
+
+    assert settings.discovery_model == "google-cloud:project"
+    assert settings.documentation_model == "google-cloud:documentation"
+    assert os.environ["GOOGLE_CLOUD_PROJECT"] == "process-project"
+    assert "UNRELATED_SECRET" not in os.environ

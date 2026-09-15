@@ -92,3 +92,13 @@ def test_candidate_enumeration_excludes_passwords_and_classifies_writes() -> Non
     settings = next(candidate for candidate in candidates if candidate.label == "Settings")
     assert settings.action.kind == "navigate"
     assert settings.action.url == "https://example.test/settings"
+
+
+def test_candidate_enumeration_excludes_unnamed_controls() -> None:
+    draft = observation(
+        url="https://example.test/",
+        aria="- button",
+        controls=[ControlDraft(role="button", name="")],
+    )
+
+    assert enumerate_candidates(draft) == []

@@ -178,8 +178,20 @@ class PlaywrightBrowser:
                   const label = id
                     ? document.querySelector(`label[for="${CSS.escape(id)}"]`)?.textContent?.trim()
                     : null;
-                  const name = element.getAttribute("aria-label") || label || element.textContent?.trim() ||
-                    element.getAttribute("placeholder") || element.getAttribute("name") || role;
+                  const labelledBy = (element.getAttribute("aria-labelledby") || "")
+                    .split(/\\s+/)
+                    .filter(Boolean)
+                    .map(reference => document.getElementById(reference)?.textContent?.trim())
+                    .filter(Boolean)
+                    .join(" ");
+                  const valueName = ["button", "submit", "reset"].includes(inputType)
+                    ? element.getAttribute("value")
+                    : null;
+                  const descendantName = element.querySelector("img[alt]")?.getAttribute("alt") ||
+                    element.querySelector("svg title")?.textContent?.trim();
+                  const name = labelledBy || element.getAttribute("aria-label") || label ||
+                    element.textContent?.trim() || valueName || descendantName ||
+                    element.getAttribute("title") || element.getAttribute("placeholder") || "";
                   return {
                     role,
                     name: name.slice(0, 300),

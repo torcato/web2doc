@@ -44,6 +44,22 @@ Use a Pydantic AI model after configuring its provider credentials:
 uv run web2doc discover demo --role default --model openai:MODEL_NAME
 ```
 
+Web2doc automatically loads recognized settings from `.env` in the current working directory and in the project
+directory. Real environment variables take precedence, followed by the project file. Use separate models for frequent
+exploration decisions and final prose composition:
+
+```dotenv
+WEB2DOC_DISCOVERY_MODEL=google-cloud:VERTEX_MODEL_ID
+WEB2DOC_DOCUMENTATION_MODEL=google-cloud:VERTEX_MODEL_ID
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+GOOGLE_CLOUD_PROJECT=your-project-id
+GOOGLE_CLOUD_LOCATION=europe-west4
+```
+
+The Google Cloud provider uses Application Default Credentials. Prefer user ADC, service-account impersonation, or
+workload identity over a long-lived JSON key where possible. Credential files and `.env` are ignored from Git and must
+never be copied into run artifacts.
+
 Map a known procedure into the same state graph without calling a model:
 
 ```bash

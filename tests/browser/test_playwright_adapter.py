@@ -613,6 +613,35 @@ async def test_ambiguous_target_is_rejected(tmp_path: Path, site_url: str) -> No
 
 @pytest.mark.browser
 @pytest.mark.asyncio
+async def test_observation_does_not_invent_names_for_unnamed_controls(
+    tmp_path: Path,
+) -> None:
+    site_url = "https://example.test"
+    config = ProjectConfig(
+        name="browser test",
+        base_url=site_url,
+        allowed_origins={site_url},
+        roles=[RoleConfig(name="admin")],
+    )
+    browser = PlaywrightBrowser(project_root=tmp_path, config=config, role=config.role("admin"))
+    session = await browser.start(run_id="unnamed-control-test")
+    try:
+        await session.page.set_content(
+            '<button id="unnamed"></button><button aria-label="Open menu"></button>'
+        )
+
+        observation = await browser.observe(session)
+
+        assert [(control.role, control.name) for control in observation.controls] == [
+            ("button", ""),
+            ("button", "Open menu"),
+        ]
+    finally:
+        await browser.close(session)
+
+
+@pytest.mark.browser
+@pytest.mark.asyncio
 async def test_delayed_target_is_awaited_and_missing_target_is_rejected(tmp_path: Path, site_url: str) -> None:
     config = ProjectConfig(
         name="browser test",
