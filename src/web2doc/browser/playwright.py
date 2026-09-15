@@ -146,17 +146,28 @@ class PlaywrightBrowser:
         controls = TypeAdapter(list[ControlDraft]).validate_python(
             await session.page.locator("a[href], button, input, select, textarea, [role]").evaluate_all(
                 """
-                elements => elements.filter(element => {
-                  const style = getComputedStyle(element);
-                  const rect = element.getBoundingClientRect();
-                  return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-                }).map(element => {
+                elements => {
+                  const visible = element => {
+                    const style = getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.visibility !== "hidden" && style.display !== "none" &&
+                      rect.width > 0 && rect.height > 0 &&
+                      !element.closest('[aria-hidden="true"], [inert]');
+                  };
+                  const visibleRegions = selector => Array.from(document.querySelectorAll(selector)).filter(visible);
+                  const popups = visibleRegions('[role="listbox"], [role="menu"]');
+                  const dialogs = visibleRegions('[role="dialog"], dialog[open]');
+                  const activeRegion = popups.at(-1) || dialogs.at(-1) || null;
+                  return elements
+                    .filter(element => visible(element) && (!activeRegion || activeRegion.contains(element)))
+                    .map(element => {
                   const tag = element.tagName.toLowerCase();
                   const inputType = tag === "input" ? (element.getAttribute("type") || "text").toLowerCase() : null;
                   let role = element.getAttribute("role");
-                  if (!role) {
+                  if (tag === "button" && (!role || role === "presentation")) role = "button";
+                  else if (!role) {
                     if (tag === "a") role = "link";
-                    else if (tag === "button" || inputType === "submit" || inputType === "button") role = "button";
+                    else if (inputType === "submit" || inputType === "button") role = "button";
                     else if (tag === "select") role = "combobox";
                     else if (
                       tag === "textarea" ||
@@ -196,7 +207,8 @@ class PlaywrightBrowser:
                       ? Array.from(element.options).map(option => option.value).filter(Boolean).slice(0, 20)
                       : [],
                   };
-                })
+                    });
+                }
                 """
             )
         )
@@ -231,7 +243,6 @@ class PlaywrightBrowser:
 
     async def _inject_synthetic_labels(self, page: Page) -> None:
         await page.evaluate("""
-            let visibleIndex = 0;
             document.querySelectorAll('button, a, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="switch"], [role="tab"]').forEach((el) => {
                 // Ignore hidden elements so they don't shift indices when a modal is closed
                 if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
@@ -241,16 +252,21 @@ class PlaywrightBrowser:
                 const hasText = el.innerText && el.innerText.trim().length > 0;
                 
                 if (!hasLabel && !hasTitle && !hasText) {
-                    const svg = el.querySelector('svg');
-                    let hint = 'element';
-                    if (svg) {
-                        const svgClass = typeof svg.className === 'string' ? svg.className : (svg.className && svg.className.baseVal ? svg.className.baseVal : '');
-                        hint = svgClass.replace(/[^a-zA-Z0-9-]/g, ' ').trim() || 'icon';
+                    const id = el.getAttribute('id') || '';
+                    const knownIds = {
+                        'new-chat-button': 'New chat',
+                        'upload-button': 'Attach file',
+                        'chat-settings-open-modal': 'Chat settings',
+                        'chat-submit': 'Send message',
+                    };
+                    let idLabel = knownIds[id];
+                    if (!idLabel && id.startsWith('upload-button')) idLabel = 'Attach file';
+                    if (!idLabel && id.startsWith('new-chat-button')) idLabel = 'New chat';
+                    if (idLabel) {
+                        el.setAttribute('aria-label', idLabel);
+                        el.setAttribute('data-web2doc-synthetic', 'true');
                     }
-                    el.setAttribute('aria-label', `Unnamed ${hint} ${visibleIndex}`);
-                    el.setAttribute('data-web2doc-synthetic', 'true');
                 }
-                visibleIndex++;
             });
         """)
 
@@ -285,6 +301,10 @@ class PlaywrightBrowser:
                 raise BrowserExecutionError(f"unsupported action: {type(action).__name__}")
         except BaseException as exc:
             self._raise_if_request_was_blocked(session, cause=exc)
+            if isinstance(exc, PlaywrightTimeoutError):
+                raise TargetNotFoundError(
+                    f"target was not interactable before timeout: {action.description}"
+                ) from exc
             raise
         self._raise_if_request_was_blocked(session)
         await self._check_open_pages(session)

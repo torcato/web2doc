@@ -21,6 +21,7 @@ def test_initialize_and_load_project(tmp_path: Path) -> None:
     assert config.name == "Demo"
     assert config.allowed_origins == {"https://example.com"}
     assert config.roles[0].name == "default"
+    assert config.policy.allowed_write_operations == {"click-confirm"}
     assert (project_file.parent / ".web2doc/private/auth").is_dir()
 
 

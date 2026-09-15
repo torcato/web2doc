@@ -102,3 +102,18 @@ def test_candidate_enumeration_excludes_unnamed_controls() -> None:
     )
 
     assert enumerate_candidates(draft) == []
+
+
+def test_candidate_enumeration_excludes_dismissive_controls_as_tasks() -> None:
+    draft = observation(
+        url="https://example.test/",
+        aria="- dialog",
+        controls=[
+            ControlDraft(role="button", name="Close"),
+            ControlDraft(role="button", name="Cancel"),
+            ControlDraft(role="button", name="Reset"),
+            ControlDraft(role="button", name="Confirm"),
+        ],
+    )
+
+    assert [candidate.label for candidate in enumerate_candidates(draft)] == ["Confirm"]

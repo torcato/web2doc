@@ -20,6 +20,11 @@ Create a project:
 uv run web2doc init demo --base-url http://127.0.0.1:8000 --path ./demo
 ```
 
+New projects are configured for bounded unguided exploration and allow the inferred `click-confirm` operation.
+This lets discovery progress through confirmation dialogs, including dialogs that may change or delete data. Use a
+disposable target environment and remove `click-confirm` from `allowed_write_operations` when confirmation must
+remain operator-controlled.
+
 Edit `demo/project.toml`, then capture authentication if needed:
 
 ```bash

@@ -18,6 +18,7 @@ from web2doc.domain.models import (
 )
 
 WRITE_WORDS = re.compile(r"(?i)\b(create|delete|remove|save|submit|send|publish|invite|buy|pay|confirm)\b")
+NON_DOCUMENTATION_CONTROLS = {"cancel", "close", "reset"}
 
 
 def _slug(value: str) -> str:
@@ -46,7 +47,12 @@ def _candidate(action: NavigateAction | ClickAction | FillAction | SelectAction,
 def enumerate_candidates(observation: ObservationDraft) -> list[CandidateAction]:
     candidates: dict[str, CandidateAction] = {}
     for control in observation.controls:
-        if control.disabled or not control.name.strip() or control.input_type == "password":
+        if (
+            control.disabled
+            or not control.name.strip()
+            or control.input_type == "password"
+            or control.name.strip().casefold() in NON_DOCUMENTATION_CONTROLS
+        ):
             continue
         action: NavigateAction | ClickAction | FillAction | SelectAction | None = None
         if control.role == "link" and control.href:

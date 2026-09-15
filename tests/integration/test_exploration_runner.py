@@ -120,6 +120,17 @@ class LoginBrowser(DiscoveryBrowser):
         return draft
 
 
+class RepeatedControlBrowser(DiscoveryBrowser):
+    async def observe(self, session: FakeSession) -> ObservationDraft:
+        return ObservationDraft(
+            url=f"http://127.0.0.1:8765/state/{session.state}",
+            title=f"State {session.state}",
+            aria_snapshot=f"- heading: State {session.state}",
+            screenshot=f"png-{session.state}".encode(),
+            controls=[ControlDraft(role="button", name="Open details")] if session.state else [],
+        )
+
+
 class DeepBranchBrowser(BranchBrowser):
     async def observe(self, session: FakeSession) -> ObservationDraft:
         draft = await super().observe(session)
@@ -177,14 +188,27 @@ async def test_unguided_discovery_persists_graph_feature_and_frontier(repository
 
 
 @pytest.mark.asyncio
-async def test_self_transition_stops_as_loop(repository, tmp_path, project_config) -> None:
+async def test_self_transition_exhausts_frontier_without_stopping_other_exploration(
+    repository, tmp_path, project_config
+) -> None:
     browser = DiscoveryBrowser(self_loop=True)
     runner = make_runner(repository, tmp_path, project_config, browser, HeuristicPlanner())
 
     run_id = await runner.run(mode=DiscoveryMode.UNGUIDED)
 
-    assert repository.get_run(run_id).stop_reason == "loop_detected"
+    assert repository.get_run(run_id).stop_reason == "frontier_exhausted"
     assert len(repository.list_attempts(run_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_action_is_not_repeated_along_a_branch(repository, tmp_path, project_config) -> None:
+    browser = RepeatedControlBrowser()
+    runner = make_runner(repository, tmp_path, project_config, browser, HeuristicPlanner())
+
+    run_id = await runner.run(mode=DiscoveryMode.UNGUIDED)
+
+    assert repository.get_run(run_id).stop_reason == "frontier_exhausted"
+    assert browser.executed == ["navigate", "click"]
 
 
 @pytest.mark.asyncio

@@ -64,21 +64,19 @@ class HeuristicPlanner:
         max_output_tokens: int,
     ) -> PlannerResult:
         del observation, max_output_tokens
-        kind_priority = {"navigate": 100, "click": 90, "select": 70, "fill": 60}
         ordered = sorted(
             candidates,
             key=lambda candidate: (
-                candidate.action.effect == "observe",
-                kind_priority.get(candidate.action.kind, 50),
-                candidate.label,
+                _documentation_priority(candidate),
+                candidate.label.casefold(),
             ),
             reverse=True,
         )
         proposals = [
             RankedCandidate(
                 candidate_id=candidate.id,
-                rationale="Visible, policy-checkable control not yet explored in this state.",
-                priority=max(1, kind_priority.get(candidate.action.kind, 50) - index),
+                rationale="Visible control ranked by its value to end-user documentation.",
+                priority=max(1, _documentation_priority(candidate) - index),
                 feature_title=candidate.label,
                 feature_description=f"Candidate capability exposed by the {candidate.action.kind} control.",
             )
@@ -89,6 +87,32 @@ class HeuristicPlanner:
             usage=PlannerUsage(usage_reported=True),
             model_name="heuristic",
         )
+
+
+def _documentation_priority(candidate: CandidateAction) -> int:
+    """Prefer controls that reveal user tasks over cosmetic and dismissive controls."""
+
+    label = candidate.label.casefold().strip()
+    if label in {"chat settings", "settings", "configure"}:
+        return 100
+    if label == "new chat":
+        return 98
+    if label == "attach file" or label.startswith(("upload-button", "upload button")):
+        return 96
+    if label in {"model", "prompt profile", "mcp server", "send message", "confirm"}:
+        return 92
+    target = getattr(candidate.action, "target", None)
+    if candidate.action.kind == "select" or (target is not None and target.role == "option"):
+        return 88
+    if candidate.action.kind == "fill":
+        return 75
+    if label == "toggle theme" or label.endswith(" theme"):
+        return 60
+    if label in {"readme", "help", "about"}:
+        return 50
+    if label in {"close", "cancel", "reset"}:
+        return 10
+    return {"navigate": 90, "click": 80}.get(candidate.action.kind, 70)
 
 
 class PydanticAIPlanner:

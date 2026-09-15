@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from time import monotonic
 from typing import Literal
 
@@ -41,6 +42,13 @@ from web2doc.storage.repository import Repository
 
 ACTION_ADAPTER: TypeAdapter[Action] = TypeAdapter(Action)
 ACTION_LIST_ADAPTER: TypeAdapter[list[Action]] = TypeAdapter(list[Action])
+
+
+def _action_signature(action: Action) -> str:
+    return json.dumps(
+        action.model_dump(mode="json", exclude={"id", "description", "timeout_ms"}),
+        sort_keys=True,
+    )
 
 
 class ExplorationRunner[SessionT]:
@@ -189,7 +197,6 @@ class ExplorationRunner[SessionT]:
         state: StateRow,
         budget: BudgetTracker,
     ) -> None:
-        visits: dict[str, int] = {state.id: 1}
         blocked_any = False
         depth_blocked = False
         current_path: list[Action] = []
@@ -212,7 +219,12 @@ class ExplorationRunner[SessionT]:
                 self.repository.set_run_status(run_id, RunStatus.PAUSED, DiscoveryStop.AUTHENTICATION_REQUIRED)
                 return
             if not self.repository.frontier_exists_for_state(run_id, state.id):
-                candidates = enumerate_candidates(draft)[: budget.limits.max_candidates_per_state]
+                path_signatures = {_action_signature(action) for action in current_path}
+                candidates = [
+                    candidate
+                    for candidate in enumerate_candidates(draft)
+                    if _action_signature(candidate.action) not in path_signatures
+                ][: budget.limits.max_candidates_per_state]
                 if candidates:
                     if len(current_path) + 1 > budget.limits.max_depth:
                         depth_blocked = True
@@ -332,10 +344,8 @@ class ExplorationRunner[SessionT]:
                 FrontierStatus.EXPLORED,
                 attempt_id=last_attempt.id,
             )
-            previous_state_id = state.id
-            visits[next_state.id] = visits.get(next_state.id, 0) + 1
             state = next_state
-            
+
             # Algorithmic Minimizer: Prune loops if we return to a state in the current path
             if next_state.id in current_state_path:
                 loop_start_idx = current_state_path.index(next_state.id)
@@ -343,12 +353,12 @@ class ExplorationRunner[SessionT]:
                 current_state_path = current_state_path[:loop_start_idx]
             else:
                 current_path = [*current_path, action]
-                
+
             current_state_path = [*current_state_path, state.id]
-            
-            if state.id == previous_state_id or visits[state.id] > budget.limits.max_visits_per_state:
-                self._stop(run_id, DiscoveryStop.LOOP_DETECTED)
-                return
+
+            # A repeated state ends only this path. Its already-created frontier is finite,
+            # so discovery can safely continue with unexplored siblings until a budget or
+            # frontier exhaustion provides the terminal condition.
 
     async def _restore_frontier(
         self,

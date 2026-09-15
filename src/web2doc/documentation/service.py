@@ -10,6 +10,7 @@ from web2doc.documentation.models import (
     GenerationContext,
     ProvenanceKind,
 )
+from web2doc.domain.models import Action, ClickAction, FillAction, SelectAction
 from web2doc.storage.repository import Repository
 from web2doc.verification.models import (
     ControlPredicate,
@@ -145,7 +146,7 @@ class DocumentationService:
             goal=workflow.goal,
             role=workflow.role,
             prerequisite_descriptions=prerequisites,
-            step_descriptions=[step.action.description for step in workflow.steps],
+            step_descriptions=[_action_text(step.action) for step in workflow.steps],
             step_expected_descriptions=step_expected,
             outcome_description="; ".join(_predicate_text(predicate) for predicate in workflow.final_outcomes),
             unresolved_questions=workflow.unresolved_questions,
@@ -183,16 +184,37 @@ class DocumentationService:
 
 def _predicate_text(predicate: OutcomePredicate) -> str:
     if isinstance(predicate, VisibleTextPredicate):
-        qualifier = "is visible" if predicate.present else "is not visible"
-        return f"Text {predicate.text!r} {qualifier}"
+        return (
+            f"{predicate.text} is displayed"
+            if predicate.present
+            else f"{predicate.text} is no longer displayed"
+        )
     if isinstance(predicate, UrlPredicate):
-        return f"The page URL has {predicate.match} match {predicate.expected!r}"
+        if predicate.match == "path":
+            return f"You arrive at {predicate.expected}"
+        return f"The requested page opens at {predicate.expected}"
     if isinstance(predicate, TitlePredicate):
-        return f"The page title has {predicate.match} match {predicate.expected!r}"
+        return f"The {predicate.expected} page is open"
     if isinstance(predicate, ControlPredicate):
         state = "is available" if predicate.present else "is absent"
         name = predicate.target.name or predicate.target.label or predicate.target.test_id or "control"
-        return f"The {name!r} control {state}"
+        return f"{name} {state}"
     if isinstance(predicate, EnvironmentJsonPredicate):
-        return f"Verified application state {predicate.path!r} {predicate.operator} {predicate.expected!r}"
+        return "The application confirms that the requested change took effect"
     raise TypeError(f"unsupported predicate: {type(predicate).__name__}")
+
+
+def _action_text(action: Action) -> str:
+    if isinstance(action, ClickAction):
+        if action.description.startswith("Choose "):
+            return action.description
+        name = action.target.name or action.target.label or action.description.removeprefix("Activate ")
+        verb = "Choose" if action.target.role in {"option", "menuitem"} else "Click"
+        return f"{verb} {name}"
+    if isinstance(action, FillAction):
+        name = action.target.name or action.target.label or "the field"
+        return f"Enter a value in {name}"
+    if isinstance(action, SelectAction):
+        name = action.target.name or action.target.label or "the list"
+        return f"Choose {action.value} in {name}"
+    return action.description

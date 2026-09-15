@@ -63,7 +63,7 @@ def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:
                 "",
                 "[policy]",
                 'allowed_actions = ["navigate", "click", "fill", "select", "press", "scroll", "wait"]',
-                "allowed_write_operations = []",
+                'allowed_write_operations = ["click-confirm"]',
                 "supporting_origins = []",
                 "",
                 "[discovery]",

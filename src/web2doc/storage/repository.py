@@ -1314,8 +1314,10 @@ class Repository:
             for item in items:
                 transition = session.scalar(select(TransitionRow).where(TransitionRow.attempt_id == item.attempt_id))
                 target = session.get(StateRow, transition.target_state_id) if transition else None
+                source = session.get(StateRow, item.state_id)
                 if target is None:
                     continue
+                target_observation = session.get(ObservationRow, target.representative_observation_id)
                 features = tuple(
                     session.scalars(
                         select(FeatureRow).where(
@@ -1329,7 +1331,10 @@ class Repository:
                         "label": item.label,
                         "path": json.loads(item.path_json),
                         "action": json.loads(item.action_json),
+                        "source_structure": source.normalized_structure if source is not None else "",
                         "target_route": target.route,
+                        "target_structure": target.normalized_structure,
+                        "target_title": target_observation.title if target_observation is not None else "",
                         "feature_ids": [feature.id for feature in features],
                     }
                 )

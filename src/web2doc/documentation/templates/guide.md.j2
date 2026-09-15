@@ -26,7 +26,7 @@
 <details>
 <summary>View screenshot</summary>
 
-![Evidence for step {{ step.sequence }}]({{ evidence_prefix }}assets/{{ step.instruction.evidence[0].screenshot_artifact_id }}.png)
+<img src="{{ evidence_prefix }}assets/{{ step.instruction.evidence[0].screenshot_artifact_id }}.png" alt="Evidence for step {{ step.sequence }}">
 </details>
 
 {% endfor %}

@@ -7,7 +7,7 @@ from pydantic_ai.models.test import TestModel
 
 from web2doc.discovery.budget import BudgetTracker
 from web2doc.discovery.models import CandidateAction, DiscoveryStop, ModelObservation
-from web2doc.discovery.planner import PlannerError, PlannerModelOutput, PydanticAIPlanner
+from web2doc.discovery.planner import HeuristicPlanner, PlannerError, PlannerModelOutput, PydanticAIPlanner
 from web2doc.domain.models import ClickAction, DiscoveryLimits, Target
 
 
@@ -30,6 +30,25 @@ def model_observation() -> ModelObservation:
         alerts=[],
         invalid_controls=[],
     )
+
+
+@pytest.mark.asyncio
+async def test_heuristic_planner_prioritizes_documentable_tasks_over_cosmetic_controls() -> None:
+    labels = ["Toggle theme", "Readme", "Cancel", "Attach file", "New chat", "Chat settings"]
+    candidates = [
+        CandidateAction(
+            id=f"candidate-{index}",
+            signature=str(index) * 64,
+            label=label,
+            action=ClickAction(description=f"Activate {label}", target=Target(role="button", name=label)),
+        )
+        for index, label in enumerate(labels, start=1)
+    ]
+
+    result = await HeuristicPlanner().propose(model_observation(), candidates, max_output_tokens=500)
+
+    ordered_labels = [labels[int(proposal.candidate_id.rsplit("-", 1)[1]) - 1] for proposal in result.output.proposals]
+    assert ordered_labels == ["Chat settings", "New chat", "Attach file", "Toggle theme", "Readme", "Cancel"]
 
 
 def test_budget_reserves_model_capacity_conservatively() -> None:
