@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic_ai.models.test import TestModel
 
-from web2doc.documentation.composer import PydanticAIDocumentComposer
+from web2doc.documentation.composer import NarrativeModelOutput, PydanticAIDocumentComposer
 from web2doc.documentation.models import (
     DocumentClaim,
     DocumentNarrative,
@@ -12,6 +14,15 @@ from web2doc.documentation.models import (
     ProvenanceKind,
 )
 from web2doc.documentation.render import MarkdownRenderer, markdown_escape
+
+
+def test_document_provider_schema_avoids_expensive_serving_constraints() -> None:
+    schema = json.dumps(NarrativeModelOutput.model_json_schema())
+
+    assert "maxItems" not in schema
+    assert "maxLength" not in schema
+    assert "minimum" not in schema
+    assert "maximum" not in schema
 
 
 def generation_context() -> GenerationContext:
