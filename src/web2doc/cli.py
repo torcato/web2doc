@@ -312,7 +312,7 @@ def document_generate(
         selected_model = load_runtime_settings(project_dir).model_for_documentation(model)
         composer = PydanticAIDocumentComposer(selected_model) if selected_model else DeterministicComposer()
         revision = asyncio.run(
-            DocumentationService(repository, project_id).generate(
+            DocumentationService(repository, project_id, _config.description).generate(
                 workflow_revision_id,
                 composer,
                 verification_id=verification_id,

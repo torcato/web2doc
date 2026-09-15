@@ -22,9 +22,10 @@ from web2doc.verification.models import (
 
 
 class DocumentationService:
-    def __init__(self, repository: Repository, project_id: str) -> None:
+    def __init__(self, repository: Repository, project_id: str, project_description: str | None = None) -> None:
         self.repository = repository
         self.project_id = project_id
+        self.project_description = project_description
 
     async def generate(
         self,
@@ -138,6 +139,7 @@ class DocumentationService:
         ]
         return GenerationContext(
             workflow_revision_id=workflow_revision_id,
+            project_description=self.project_description,
             verification_id=raw["verification_id"],
             workflow_title=workflow.title,
             goal=workflow.goal,

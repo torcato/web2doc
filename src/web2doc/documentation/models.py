@@ -113,6 +113,7 @@ class GenerationContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workflow_revision_id: str
+    project_description: str | None = None
     verification_id: str
     workflow_title: str
     goal: str

@@ -231,7 +231,11 @@ class PlaywrightBrowser:
 
     async def _inject_synthetic_labels(self, page: Page) -> None:
         await page.evaluate("""
-            document.querySelectorAll('button, a, [role="button"], [role="link"]').forEach((el, index) => {
+            let visibleIndex = 0;
+            document.querySelectorAll('button, a, [role="button"], [role="link"]').forEach((el) => {
+                // Ignore hidden elements so they don't shift indices when a modal is closed
+                if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
+                
                 const hasLabel = el.getAttribute('aria-label') || el.getAttribute('aria-labelledby');
                 const hasTitle = el.getAttribute('title');
                 const hasText = el.innerText && el.innerText.trim().length > 0;
@@ -243,9 +247,10 @@ class PlaywrightBrowser:
                         const svgClass = typeof svg.className === 'string' ? svg.className : (svg.className && svg.className.baseVal ? svg.className.baseVal : '');
                         hint = svgClass.replace(/[^a-zA-Z0-9-]/g, ' ').trim() || 'icon';
                     }
-                    el.setAttribute('aria-label', `Unnamed ${hint} ${index}`);
+                    el.setAttribute('aria-label', `Unnamed ${hint} ${visibleIndex}`);
                     el.setAttribute('data-web2doc-synthetic', 'true');
                 }
+                visibleIndex++;
             });
         """)
 

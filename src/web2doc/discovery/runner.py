@@ -193,6 +193,7 @@ class ExplorationRunner[SessionT]:
         blocked_any = False
         depth_blocked = False
         current_path: list[Action] = []
+        current_state_path: list[str] = [state.id]
         while True:
             current = self.repository.get_run(run_id)
             if current is None:
@@ -280,7 +281,7 @@ class ExplorationRunner[SessionT]:
                 restored = await self._restore_frontier(run_id, session, frontier, observation, state, budget)
                 if restored is None:
                     return
-                observation, state, current_path, matched = restored
+                observation, state, current_path, current_state_path, matched = restored
                 if not matched:
                     blocked_any = True
                     continue
@@ -334,7 +335,17 @@ class ExplorationRunner[SessionT]:
             previous_state_id = state.id
             visits[next_state.id] = visits.get(next_state.id, 0) + 1
             state = next_state
-            current_path = [*current_path, action]
+            
+            # Algorithmic Minimizer: Prune loops if we return to a state in the current path
+            if next_state.id in current_state_path:
+                loop_start_idx = current_state_path.index(next_state.id)
+                current_path = current_path[:loop_start_idx]
+                current_state_path = current_state_path[:loop_start_idx]
+            else:
+                current_path = [*current_path, action]
+                
+            current_state_path = [*current_state_path, state.id]
+            
             if state.id == previous_state_id or visits[state.id] > budget.limits.max_visits_per_state:
                 self._stop(run_id, DiscoveryStop.LOOP_DETECTED)
                 return
@@ -347,7 +358,7 @@ class ExplorationRunner[SessionT]:
         observation: ObservationRow,
         state: StateRow,
         budget: BudgetTracker,
-    ) -> tuple[ObservationRow, StateRow, list[Action], bool] | None:
+    ) -> tuple[ObservationRow, StateRow, list[Action], list[str], bool] | None:
         base_action = NavigateAction(
             description="Restore discovery start page",
             url=str(self.config.base_url),
@@ -358,6 +369,7 @@ class ExplorationRunner[SessionT]:
         observation, state = restored
         path = ACTION_LIST_ADAPTER.validate_json(frontier.path_json)
         replayed_path: list[Action] = []
+        replayed_state_path: list[str] = [state.id]
         for saved_action in path:
             replay_action = saved_action.model_copy(
                 update={
@@ -370,14 +382,15 @@ class ExplorationRunner[SessionT]:
                 return None
             observation, state = restored
             replayed_path.append(saved_action)
+            replayed_state_path.append(state.id)
         if state.id != frontier.state_id:
             self.repository.set_frontier_status(
                 frontier.id,
                 FrontierStatus.BLOCKED,
                 reason="saved path no longer restores the expected canonical state",
             )
-            return observation, state, replayed_path, False
-        return observation, state, replayed_path, True
+            return observation, state, replayed_path, replayed_state_path, False
+        return observation, state, replayed_path, replayed_state_path, True
 
     async def _plan(
         self,
