@@ -7,6 +7,22 @@ from web2doc.domain.models import Action, ExecutionResult, ObservationDraft
 SessionT = TypeVar("SessionT")
 
 
+class BrowserExecutionError(RuntimeError):
+    pass
+
+
+class TargetNotFoundError(BrowserExecutionError):
+    pass
+
+
+class AmbiguousTargetError(BrowserExecutionError):
+    pass
+
+
+class ScopeViolationError(BrowserExecutionError):
+    pass
+
+
 class BrowserAdapter(Protocol[SessionT]):
     async def start(self, *, run_id: str, headed: bool = False) -> SessionT: ...
 

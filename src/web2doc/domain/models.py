@@ -80,6 +80,7 @@ class DiscoveryConfig(BaseModel):
             r"\b[0-9a-fA-F]{8}-[0-9a-fA-F-]{27,}\b",
         ]
     )
+    strict: bool = Field(default=False)
     limits: DiscoveryLimits = Field(default_factory=DiscoveryLimits)
 
 

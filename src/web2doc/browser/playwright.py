@@ -19,6 +19,12 @@ from playwright.async_api import (
 )
 from pydantic import TypeAdapter
 
+from web2doc.browser.base import (
+    AmbiguousTargetError,
+    BrowserExecutionError,
+    ScopeViolationError,
+    TargetNotFoundError,
+)
 from web2doc.domain.models import (
     Action,
     ClickAction,
@@ -37,22 +43,6 @@ from web2doc.domain.models import (
 )
 from web2doc.policy.actions import ActionPolicy
 from web2doc.settings import RuntimeSettings
-
-
-class BrowserExecutionError(RuntimeError):
-    pass
-
-
-class TargetNotFoundError(BrowserExecutionError):
-    pass
-
-
-class AmbiguousTargetError(BrowserExecutionError):
-    pass
-
-
-class ScopeViolationError(BrowserExecutionError):
-    pass
 
 
 @dataclass

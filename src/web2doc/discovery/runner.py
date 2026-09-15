@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from time import monotonic
+from typing import Literal
 
 from pydantic import TypeAdapter
 
-from web2doc.browser.base import BrowserAdapter
+from web2doc.browser.base import AmbiguousTargetError, BrowserAdapter, TargetNotFoundError
 from web2doc.discovery.budget import BudgetTracker
 from web2doc.discovery.candidates import enumerate_candidates
 from web2doc.discovery.models import (
@@ -107,7 +108,7 @@ class ExplorationRunner[SessionT]:
                     None,
                     budget,
                 )
-                if first is not None:
+                if isinstance(first, tuple):
                     observation, state = first
                     await self._run_supplied(
                         run.id,
@@ -130,7 +131,7 @@ class ExplorationRunner[SessionT]:
                     budget,
                 )
                 current = self.repository.get_run(run.id)
-                if first is not None and current is not None and current.status == RunStatus.RUNNING:
+                if isinstance(first, tuple) and current is not None and current.status == RunStatus.RUNNING:
                     observation, state = first
                     await self._run_unguided(run.id, session, observation, state, budget)
 
@@ -175,7 +176,7 @@ class ExplorationRunner[SessionT]:
                 self._stop(run_id, reason)
                 return
             outcome = await self._execute(run_id, session, action, observation, state, budget)
-            if outcome is None:
+            if not isinstance(outcome, tuple):
                 return
             observation, state = outcome
         self.repository.set_run_status(run_id, RunStatus.AWAITING_REVIEW, DiscoveryStop.SUPPLIED_COMPLETE)
@@ -308,6 +309,13 @@ class ExplorationRunner[SessionT]:
 
             self.repository.set_frontier_status(frontier.id, FrontierStatus.EXPLORING)
             outcome = await self._execute(run_id, session, action, observation, state, budget)
+            if outcome == "RECOVERABLE":
+                self.repository.set_frontier_status(
+                    frontier.id,
+                    FrontierStatus.BLOCKED,
+                    reason="recoverable execution failure",
+                )
+                continue
             if outcome is None:
                 current = self.repository.get_run(run_id)
                 self.repository.set_frontier_status(
@@ -345,7 +353,7 @@ class ExplorationRunner[SessionT]:
             url=str(self.config.base_url),
         )
         restored = await self._execute(run_id, session, base_action, observation, state, budget)
-        if restored is None:
+        if not isinstance(restored, tuple):
             return None
         observation, state = restored
         path = ACTION_LIST_ADAPTER.validate_json(frontier.path_json)
@@ -358,7 +366,7 @@ class ExplorationRunner[SessionT]:
                 }
             )
             restored = await self._execute(run_id, session, replay_action, observation, state, budget)
-            if restored is None:
+            if not isinstance(restored, tuple):
                 return None
             observation, state = restored
             replayed_path.append(saved_action)
@@ -448,7 +456,7 @@ class ExplorationRunner[SessionT]:
         before_observation: ObservationRow | None,
         before_state: StateRow | None,
         budget: BudgetTracker,
-    ) -> tuple[ObservationRow, StateRow] | None:
+    ) -> tuple[ObservationRow, StateRow] | Literal["RECOVERABLE"] | None:
         reason = budget.stop_reason()
         if reason is not None:
             self._stop(run_id, reason)
@@ -477,9 +485,14 @@ class ExplorationRunner[SessionT]:
             self.repository.set_attempt_status(attempt.id, status, error=str(exc))
             if timeout_scope is not None and timeout_scope.expired() and status is not AttemptStatus.UNCERTAIN:
                 self.repository.set_run_status(run_id, RunStatus.AWAITING_REVIEW, DiscoveryStop.TIME_BUDGET)
-            else:
-                run_status = RunStatus.PAUSED if status is AttemptStatus.UNCERTAIN else RunStatus.FAILED
-                self.repository.set_run_status(run_id, run_status, str(exc))
+                return None
+
+            is_safe_failure = isinstance(exc, (TargetNotFoundError, AmbiguousTargetError))
+            if not self.config.discovery.strict and status is AttemptStatus.FAILED and is_safe_failure:
+                return "RECOVERABLE"
+
+            run_status = RunStatus.PAUSED if status is AttemptStatus.UNCERTAIN else RunStatus.FAILED
+            self.repository.set_run_status(run_id, run_status, str(exc))
             return None
         budget.record_state(created=created)
         self.repository.set_attempt_status(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import urllib.parse
 from hashlib import sha256
 
 from pydantic import TypeAdapter
@@ -34,7 +35,7 @@ def draft_workflows(
                 goal=f"Reach the verified state for {label}",
                 role=role,
                 steps=[WorkflowStep(action=action) for action in actions],
-                final_outcomes=[UrlPredicate(expected=route, match="path")],
+                final_outcomes=[UrlPredicate(expected=urllib.parse.urlsplit(route).path, match="path")],
                 unresolved_questions=[
                     "Confirm the user-facing goal, prerequisites, and business outcome before publication."
                 ],

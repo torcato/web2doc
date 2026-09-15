@@ -109,6 +109,10 @@ def discover(
     max_states: Annotated[int | None, typer.Option("--max-states", min=1)] = None,
     max_seconds: Annotated[int | None, typer.Option("--max-seconds", min=1)] = None,
     headed: Annotated[bool, typer.Option("--headed")] = False,
+    strict: Annotated[
+        bool | None,
+        typer.Option("--strict/--no-strict", help="Fail fast on execution errors. Defaults to true for supplied, false for unguided")
+    ] = None,
 ) -> None:
     config, repository, project_id, roles = _open_project(project_dir)
     try:
@@ -130,6 +134,10 @@ def discover(
             if value is not None
         }
         limits = config.discovery.limits.model_copy(update=overrides)
+        
+        effective_strict = strict if strict is not None else (mode is DiscoveryMode.SUPPLIED)
+        config.discovery.strict = effective_strict
+        
         browser = PlaywrightBrowser(
             project_root=project_dir,
             config=config,

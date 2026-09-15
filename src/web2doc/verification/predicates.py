@@ -56,7 +56,8 @@ class PredicateEvaluator:
             elif predicate.match == "prefix":
                 passed = observation.url.startswith(predicate.expected)
             else:
-                passed = urlsplit(observation.url).path == predicate.expected
+                expected_path = urlsplit(predicate.expected).path if "://" in predicate.expected else predicate.expected
+                passed = urlsplit(observation.url).path == expected_path
             return PredicateResultDraft(
                 status=PredicateStatus.PASSED if passed else PredicateStatus.FAILED,
                 message=f"URL {predicate.match} match: {passed}",
