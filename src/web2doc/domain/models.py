@@ -105,6 +105,7 @@ class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
+    description: str | None = None
     base_url: HttpUrl
     allowed_origins: set[str]
     roles: list[RoleConfig]

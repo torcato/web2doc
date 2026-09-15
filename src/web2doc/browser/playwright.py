@@ -135,6 +135,8 @@ class PlaywrightBrowser:
 
     async def observe(self, session: PlaywrightSession) -> ObservationDraft:
         await self._check_open_pages(session)
+        await self._inject_synthetic_labels(session.page)
+        
         body = session.page.locator("body")
         try:
             aria = await body.aria_snapshot(mode="ai", timeout=10_000)
@@ -227,9 +229,30 @@ class PlaywrightBrowser:
         )
         return TypeAdapter(list[str]).validate_python(values)
 
+    async def _inject_synthetic_labels(self, page: Page) -> None:
+        await page.evaluate("""
+            document.querySelectorAll('button, a, [role="button"], [role="link"]').forEach((el, index) => {
+                const hasLabel = el.getAttribute('aria-label') || el.getAttribute('aria-labelledby');
+                const hasTitle = el.getAttribute('title');
+                const hasText = el.innerText && el.innerText.trim().length > 0;
+                
+                if (!hasLabel && !hasTitle && !hasText) {
+                    const svg = el.querySelector('svg');
+                    let hint = 'element';
+                    if (svg) {
+                        const svgClass = typeof svg.className === 'string' ? svg.className : (svg.className && svg.className.baseVal ? svg.className.baseVal : '');
+                        hint = svgClass.replace(/[^a-zA-Z0-9-]/g, ' ').trim() || 'icon';
+                    }
+                    el.setAttribute('aria-label', `Unnamed ${hint} ${index}`);
+                    el.setAttribute('data-web2doc-synthetic', 'true');
+                }
+            });
+        """)
+
     async def execute(self, session: PlaywrightSession, action: Action) -> ExecutionResult:
         timeout = action.timeout_ms
         session.blocked_requests.clear()
+        await self._inject_synthetic_labels(session.page)
         try:
             if isinstance(action, NavigateAction):
                 await session.page.goto(action.url, wait_until="domcontentloaded", timeout=timeout)
