@@ -52,7 +52,13 @@ def enumerate_candidates(observation: ObservationDraft) -> list[CandidateAction]
         if control.role == "link" and control.href:
             href = urljoin(observation.url, control.href)
             action = NavigateAction(description=f"Open {control.name}", url=href)
-        elif control.role == "button":
+        elif control.role == "combobox" and control.options:
+            action = SelectAction(
+                description=f"Select an option in {control.name}",
+                target=_target(control),
+                value=control.options[0],
+            )
+        elif control.role in ("button", "menuitem", "option", "switch", "combobox", "tab"):
             write = WRITE_WORDS.search(control.name) is not None
             action = ClickAction(
                 description=f"Activate {control.name}",
@@ -65,12 +71,6 @@ def enumerate_candidates(observation: ObservationDraft) -> list[CandidateAction]
                 description=f"Enter a test value in {control.name}",
                 target=_target(control),
                 value="web2doc test",
-            )
-        elif control.role == "combobox" and control.options:
-            action = SelectAction(
-                description=f"Select an option in {control.name}",
-                target=_target(control),
-                value=control.options[0],
             )
         if action is not None:
             candidate = _candidate(action, control.name)

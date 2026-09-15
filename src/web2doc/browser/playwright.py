@@ -232,7 +232,7 @@ class PlaywrightBrowser:
     async def _inject_synthetic_labels(self, page: Page) -> None:
         await page.evaluate("""
             let visibleIndex = 0;
-            document.querySelectorAll('button, a, [role="button"], [role="link"]').forEach((el) => {
+            document.querySelectorAll('button, a, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="switch"], [role="tab"]').forEach((el) => {
                 // Ignore hidden elements so they don't shift indices when a modal is closed
                 if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
                 
