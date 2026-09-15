@@ -24,8 +24,15 @@ def upgrade() -> None:
     op.create_table(
         "document_revisions",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("workflow_revision_id", sa.String(36), sa.ForeignKey("workflow_revisions.id", ondelete="RESTRICT"), nullable=False),
-        sa.Column("verification_id", sa.String(36), sa.ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False),
+        sa.Column(
+            "workflow_revision_id",
+            sa.String(36),
+            sa.ForeignKey("workflow_revisions.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "verification_id", sa.String(36), sa.ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False
+        ),
         sa.Column("parent_revision_id", sa.String(36), sa.ForeignKey("document_revisions.id", ondelete="SET NULL")),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("content_hash", sa.String(64), nullable=False),
@@ -38,17 +45,33 @@ def upgrade() -> None:
     op.create_table(
         "document_evidence",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("document_revision_id", sa.String(36), sa.ForeignKey("document_revisions.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "document_revision_id",
+            sa.String(36),
+            sa.ForeignKey("document_revisions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("claim_path", sa.String(200), nullable=False),
-        sa.Column("verification_id", sa.String(36), sa.ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False),
-        sa.Column("observation_id", sa.String(36), sa.ForeignKey("observations.id", ondelete="RESTRICT"), nullable=False),
-        sa.Column("screenshot_artifact_id", sa.String(36), sa.ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False),
+        sa.Column(
+            "verification_id", sa.String(36), sa.ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False
+        ),
+        sa.Column(
+            "observation_id", sa.String(36), sa.ForeignKey("observations.id", ondelete="RESTRICT"), nullable=False
+        ),
+        sa.Column(
+            "screenshot_artifact_id", sa.String(36), sa.ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False
+        ),
         sa.UniqueConstraint("document_revision_id", "claim_path", name="uq_document_evidence_claim"),
     )
     op.create_table(
         "review_decisions",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("document_revision_id", sa.String(36), sa.ForeignKey("document_revisions.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "document_revision_id",
+            sa.String(36),
+            sa.ForeignKey("document_revisions.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("decision", sa.String(20), nullable=False),
         sa.Column("reviewer", sa.String(200), nullable=False),
         sa.Column("notes", sa.Text(), nullable=False),

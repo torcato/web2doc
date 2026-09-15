@@ -5,6 +5,8 @@ from typing import Protocol
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import UsageLimits
 
 from web2doc.documentation.models import DocumentNarrative, GenerationContext, NarrativeStep
 
@@ -34,7 +36,10 @@ class DeterministicComposer:
 
 
 class PydanticAIDocumentComposer:
-    def __init__(self, model: str | Model) -> None:
+    def __init__(self, model: str | Model, *, max_output_tokens: int = 4_000) -> None:
+        if max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
+        self.max_output_tokens = max_output_tokens
         self.agent = Agent(
             model,
             output_type=DocumentNarrative,
@@ -50,6 +55,21 @@ class PydanticAIDocumentComposer:
         )
 
     async def compose(self, context: GenerationContext) -> DocumentNarrative:
-        safe_context = context.model_dump(mode="json", exclude={"evidence_by_step", "prerequisite_evidence", "outcome_evidence"})
-        result = await self.agent.run(json.dumps({"verified_context": safe_context}, sort_keys=True))
+        safe_context = context.model_dump(
+            mode="json",
+            exclude={
+                "workflow_revision_id",
+                "verification_id",
+                "evidence_by_step",
+                "prerequisite_evidence",
+                "outcome_evidence",
+                "owner_sources",
+            },
+        )
+        safe_context["owner_source_text"] = list(context.owner_sources.values())
+        result = await self.agent.run(
+            json.dumps({"verified_context": safe_context}, sort_keys=True),
+            model_settings=ModelSettings(max_tokens=self.max_output_tokens),
+            usage_limits=UsageLimits(output_tokens_limit=self.max_output_tokens),
+        )
         return result.output

@@ -8,9 +8,20 @@ from typing import Annotated
 import typer
 
 from web2doc.browser.playwright import PlaywrightBrowser
-from web2doc.config import RUNTIME_DIR, initialize_project, load_procedure, load_project, load_workflow
+from web2doc.config import (
+    RUNTIME_DIR,
+    initialize_project,
+    load_document_content,
+    load_procedure,
+    load_project,
+    load_workflow,
+)
 from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
 from web2doc.discovery.runner import ExplorationRunner
+from web2doc.documentation.composer import DeterministicComposer, PydanticAIDocumentComposer
+from web2doc.documentation.models import OwnerSourceDraft, OwnerSourceKind, ReviewDecision
+from web2doc.documentation.publish import DocumentationPublisher
+from web2doc.documentation.service import DocumentationService
 from web2doc.domain.models import DiscoveryMode, ProjectConfig
 from web2doc.orchestration.runner import ProcedureRunner
 from web2doc.policy.actions import ActionPolicy
@@ -245,6 +256,153 @@ def verification_report(
     _config, repository, _project_id, _roles = _open_project(project_dir)
     try:
         typer.echo(json.dumps(repository.verification_report(verification_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("owner-source-add")
+def owner_source_add(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    source_path: Annotated[Path, typer.Argument(help="UTF-8 owner source text file")],
+    source_kind: Annotated[OwnerSourceKind, typer.Option("--kind")],
+    label: Annotated[str, typer.Option("--label", help="Human-readable source label")],
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        source = repository.add_owner_source(
+            project_id,
+            OwnerSourceDraft(
+                source_kind=source_kind,
+                label=label,
+                content=source_path.read_text(encoding="utf-8"),
+            ),
+        )
+        typer.echo(json.dumps({"id": source.id, "kind": source.source_kind, "label": source.label}, indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("document-generate")
+def document_generate(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    workflow_revision_id: Annotated[str, typer.Argument(help="Verified workflow revision identifier")],
+    verification_id: Annotated[
+        str | None, typer.Option("--verification", help="Exact passed verification; defaults to latest passed")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Pydantic AI model; omit for deterministic composition")
+    ] = None,
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        selected_model = model or RuntimeSettings().llm_model
+        composer = PydanticAIDocumentComposer(selected_model) if selected_model else DeterministicComposer()
+        revision = asyncio.run(
+            DocumentationService(repository, project_id).generate(
+                workflow_revision_id,
+                composer,
+                verification_id=verification_id,
+            )
+        )
+        typer.echo(revision.model_dump_json(indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("document-revise")
+def document_revise(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    workflow_revision_id: Annotated[str, typer.Argument(help="Workflow revision identifier")],
+    verification_id: Annotated[str, typer.Argument(help="Exact passed verification identifier")],
+    content_path: Annotated[Path, typer.Argument(help="Edited structured document JSON")],
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        revision = DocumentationService(repository, project_id).revise(
+            workflow_revision_id,
+            verification_id,
+            load_document_content(content_path),
+        )
+        typer.echo(revision.model_dump_json(indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("document-review")
+def document_review(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    document_revision_id: Annotated[str, typer.Argument(help="Exact document revision identifier")],
+    decision: Annotated[ReviewDecision, typer.Option("--decision")],
+    reviewer: Annotated[str, typer.Option("--reviewer")],
+    notes: Annotated[str, typer.Option("--notes")] = "",
+) -> None:
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        row = repository.add_review_decision(document_revision_id, decision, reviewer, notes)
+        typer.echo(json.dumps({"id": row.id, "decision": row.decision}, indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("document-bundle")
+def document_bundle(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    document_revision_id: Annotated[str, typer.Argument(help="Document revision identifier")],
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        publisher = DocumentationPublisher(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            project_id=project_id,
+            project_root=project_dir,
+        )
+        typer.echo(str(publisher.create_review_bundle(document_revision_id)))
+    finally:
+        repository.close()
+
+
+@app.command("documentation-coverage")
+def documentation_coverage(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        publisher = DocumentationPublisher(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            project_id=project_id,
+            project_root=project_dir,
+        )
+        json_path, markdown_path = publisher.write_coverage_report()
+        typer.echo(
+            json.dumps(
+                {
+                    "report": repository.documentation_coverage(project_id),
+                    "json_path": str(json_path),
+                    "markdown_path": str(markdown_path),
+                },
+                indent=2,
+            )
+        )
+    finally:
+        repository.close()
+
+
+@app.command("docs-export")
+def docs_export(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    output_dir: Annotated[Path, typer.Argument(help="New output directory")],
+) -> None:
+    _config, repository, project_id, _roles = _open_project(project_dir)
+    try:
+        publisher = DocumentationPublisher(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            project_id=project_id,
+            project_root=project_dir,
+        )
+        typer.echo(str(publisher.export_approved(output_dir)))
     finally:
         repository.close()
 

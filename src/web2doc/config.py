@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter
 
+from web2doc.documentation.models import DocumentContent
 from web2doc.domain.models import Procedure, ProjectConfig
 from web2doc.verification.models import WorkflowDefinition
 
@@ -36,6 +37,10 @@ def load_procedure(path: Path) -> Procedure:
 
 def load_workflow(path: Path) -> WorkflowDefinition:
     return TypeAdapter(WorkflowDefinition).validate_json(path.read_bytes())
+
+
+def load_document_content(path: Path) -> DocumentContent:
+    return TypeAdapter(DocumentContent).validate_json(path.read_bytes())
 
 
 def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:

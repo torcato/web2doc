@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,7 +77,9 @@ class VerificationBrowser:
             url="http://127.0.0.1:8765/",
             title="Fixture",
             aria_snapshot="- status: Success" if session.state else "- heading: Items",
-            screenshot=b"png",
+            screenshot=base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ),
         )
 
     async def execute(self, session: FakeSession, action) -> ExecutionResult:

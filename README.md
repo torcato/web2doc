@@ -81,3 +81,43 @@ The runtime data lives below `PROJECT/.web2doc/`. Authentication state and trace
 Discovery is not universally read-only: a button can have effects even when its label looks observational. Use disposable test data, explicit write-operation allowlists, and infrastructure-level network isolation.
 
 Verification reports `passed`, `failed`, or `inconclusive`. A click completing is never treated as proof of its business outcome, and uncertain writes are not repeated until trusted state reconciliation can establish whether the prior effect occurred.
+
+Generate a structured documentation revision only after its exact workflow revision has a current passing verification:
+
+```bash
+uv run web2doc document-generate demo WORKFLOW_REVISION_ID
+uv run web2doc document-bundle demo DOCUMENT_REVISION_ID
+```
+
+Add owner terminology or business rules as explicitly attributed sources:
+
+```bash
+uv run web2doc owner-source-add demo terminology.txt \
+  --kind terminology \
+  --label "Product vocabulary"
+```
+
+The deterministic composer is the default for reproducible builds. Select a configured Pydantic AI model when prose composition is desired:
+
+```bash
+uv run web2doc document-generate demo WORKFLOW_REVISION_ID --model openai:MODEL_NAME
+```
+
+Review applies to one exact document revision. Editing `document.json` from the review bundle and importing it creates a new revision whose parent approval does not carry forward:
+
+```bash
+uv run web2doc document-revise demo WORKFLOW_REVISION_ID VERIFICATION_ID edited-document.json
+uv run web2doc document-review demo DOCUMENT_REVISION_ID \
+  --decision approved \
+  --reviewer "Documentation owner" \
+  --notes "Claims checked against evidence"
+```
+
+Generate coverage reports and export the currently verified, latest, approved guides through a strict MkDocs build:
+
+```bash
+uv run web2doc documentation-coverage demo
+uv run web2doc docs-export demo ./published-documentation
+```
+
+Exports never overwrite an existing destination. A newer failed or inconclusive verification, a newer unreviewed edit, missing evidence, or an artifact hash mismatch makes the affected guide ineligible for export.

@@ -12,6 +12,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from web2doc.discovery.models import CandidateAction, FrontierStatus, PlannerUsage, StateIdentity
+from web2doc.documentation.models import (
+    DocumentContent,
+    DocumentRevision,
+    OwnerSourceDraft,
+    ReviewDecision,
+)
 from web2doc.domain.models import (
     Action,
     ArtifactDraft,
@@ -22,19 +28,25 @@ from web2doc.domain.models import (
     ObservationDraft,
     ProjectConfig,
     RunStatus,
+    Sensitivity,
     new_id,
     utc_now,
 )
 from web2doc.storage.database import (
     ActionAttemptRow,
     ArtifactRow,
+    DocumentEvidenceRow,
+    DocumentRevisionRow,
+    ExportRow,
     FeatureRow,
     FixtureReceiptRow,
     FrontierItemRow,
     ObservationRow,
+    OwnerSourceRow,
     PredicateResultRow,
     ProjectLockRow,
     ProjectRow,
+    ReviewDecisionRow,
     RoleRow,
     RunRow,
     StateRow,
@@ -68,6 +80,22 @@ def process_is_alive(process_id: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _document_evidence(content: DocumentContent) -> list[tuple[str, dict[str, str]]]:
+    claims = [("summary", content.summary), ("goal", content.goal), ("outcome", content.outcome)]
+    claims.extend((f"prerequisites[{index}]", claim) for index, claim in enumerate(content.prerequisites))
+    claims.extend((f"troubleshooting[{index}]", claim) for index, claim in enumerate(content.troubleshooting))
+    claims.extend((f"owner_notes[{index}]", claim) for index, claim in enumerate(content.owner_notes))
+    for step in content.steps:
+        claims.append((f"steps[{step.sequence}].instruction", step.instruction))
+        if step.expected_result is not None:
+            claims.append((f"steps[{step.sequence}].expected_result", step.expected_result))
+    values: list[tuple[str, dict[str, str]]] = []
+    for claim_path, claim in claims:
+        for index, reference in enumerate(claim.evidence):
+            values.append((f"{claim_path}.evidence[{index}]", reference.model_dump()))
+    return values
 
 
 class Repository:
@@ -731,6 +759,382 @@ class Repository:
                 .order_by(ActionAttemptRow.created_at.desc())
                 .limit(1)
             )
+
+    def add_owner_source(self, project_id: str, draft: OwnerSourceDraft) -> OwnerSourceRow:
+        row = OwnerSourceRow(
+            id=new_id(),
+            project_id=project_id,
+            source_kind=draft.source_kind,
+            label=draft.label,
+            content=draft.content,
+            created_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def list_owner_sources(self, project_id: str) -> Sequence[OwnerSourceRow]:
+        with self.sessions() as session:
+            return tuple(
+                session.scalars(
+                    select(OwnerSourceRow)
+                    .where(OwnerSourceRow.project_id == project_id)
+                    .order_by(OwnerSourceRow.created_at)
+                )
+            )
+
+    def verification_evidence_context(
+        self,
+        project_id: str,
+        workflow_revision_id: str,
+        verification_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self.sessions() as session:
+            revision = session.scalar(
+                select(WorkflowRevisionRow)
+                .join(WorkflowRow, WorkflowRow.id == WorkflowRevisionRow.workflow_id)
+                .where(
+                    WorkflowRevisionRow.id == workflow_revision_id,
+                    WorkflowRow.project_id == project_id,
+                )
+            )
+            if revision is None:
+                raise KeyError(f"workflow revision not found in project: {workflow_revision_id}")
+            statement = (
+                select(VerificationRow)
+                .join(RunRow, RunRow.id == VerificationRow.run_id)
+                .where(
+                    VerificationRow.workflow_revision_id == workflow_revision_id,
+                    RunRow.project_id == project_id,
+                )
+            )
+            verification = session.scalar(statement.order_by(VerificationRow.started_at.desc()).limit(1))
+            if verification is None or verification.status != VerificationStatus.PASSED:
+                raise ValueError("an exact passed verification must be the latest for documentation")
+            if verification_id is not None and verification.id != verification_id:
+                raise ValueError("the requested passed verification is stale or unrelated")
+            definition = WorkflowDefinition.model_validate_json(revision.definition_json)
+
+            def evidence_for_observation(observation_id: str | None) -> dict[str, str]:
+                if observation_id is None:
+                    raise ValueError("verified execution is missing an evidence observation")
+                observation = session.get(ObservationRow, observation_id)
+                if observation is None or observation.run_id != verification.run_id:
+                    raise ValueError("evidence observation does not belong to the verified execution")
+                return {
+                    "verification_id": verification.id,
+                    "observation_id": observation.id,
+                    "screenshot_artifact_id": observation.screenshot_artifact_id,
+                }
+
+            setup = session.scalar(
+                select(ActionAttemptRow).where(
+                    ActionAttemptRow.run_id == verification.run_id,
+                    ActionAttemptRow.sequence == 0,
+                )
+            )
+            prerequisite_evidence = evidence_for_observation(setup.after_observation_id if setup is not None else None)
+            step_evidence: dict[int, dict[str, str]] = {}
+            for sequence in range(1, len(definition.steps) + 1):
+                attempt = session.scalar(
+                    select(ActionAttemptRow).where(
+                        ActionAttemptRow.run_id == verification.run_id,
+                        ActionAttemptRow.sequence == sequence,
+                    )
+                )
+                step_evidence[sequence] = evidence_for_observation(
+                    attempt.after_observation_id if attempt is not None else None
+                )
+            final_result = session.scalar(
+                select(PredicateResultRow)
+                .where(
+                    PredicateResultRow.verification_id == verification.id,
+                    PredicateResultRow.phase == "final",
+                )
+                .order_by(PredicateResultRow.predicate_index)
+                .limit(1)
+            )
+            outcome_evidence = evidence_for_observation(
+                final_result.observation_id if final_result is not None else None
+            )
+            return {
+                "verification_id": verification.id,
+                "workflow": definition,
+                "prerequisite_evidence": prerequisite_evidence,
+                "step_evidence": step_evidence,
+                "outcome_evidence": outcome_evidence,
+            }
+
+    def add_document_revision(
+        self,
+        *,
+        workflow_revision_id: str,
+        verification_id: str,
+        content: DocumentContent,
+        source_kind: str,
+    ) -> DocumentRevision:
+        canonical = json.dumps(content.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        content_hash = sha256(canonical.encode()).hexdigest()
+        with self.sessions.begin() as session:
+            existing = session.scalar(
+                select(DocumentRevisionRow).where(
+                    DocumentRevisionRow.workflow_revision_id == workflow_revision_id,
+                    DocumentRevisionRow.content_hash == content_hash,
+                )
+            )
+            if existing is not None:
+                return DocumentRevision(
+                    id=existing.id,
+                    workflow_revision_id=existing.workflow_revision_id,
+                    verification_id=existing.verification_id,
+                    version=existing.version,
+                    content_hash=existing.content_hash,
+                    source_kind=existing.source_kind,
+                    content=DocumentContent.model_validate_json(existing.content_json),
+                )
+            latest = session.scalar(
+                select(DocumentRevisionRow)
+                .where(DocumentRevisionRow.workflow_revision_id == workflow_revision_id)
+                .order_by(DocumentRevisionRow.version.desc())
+                .limit(1)
+            )
+            row = DocumentRevisionRow(
+                id=new_id(),
+                workflow_revision_id=workflow_revision_id,
+                verification_id=verification_id,
+                parent_revision_id=latest.id if latest is not None else None,
+                version=(latest.version + 1) if latest is not None else 1,
+                content_hash=content_hash,
+                source_kind=source_kind,
+                content_json=canonical,
+                created_at=utc_now(),
+            )
+            session.add(row)
+            session.flush()
+            for claim_path, reference in _document_evidence(content):
+                session.add(
+                    DocumentEvidenceRow(
+                        id=new_id(),
+                        document_revision_id=row.id,
+                        claim_path=claim_path,
+                        verification_id=reference["verification_id"],
+                        observation_id=reference["observation_id"],
+                        screenshot_artifact_id=reference["screenshot_artifact_id"],
+                    )
+                )
+            return DocumentRevision(
+                id=row.id,
+                workflow_revision_id=workflow_revision_id,
+                verification_id=verification_id,
+                version=row.version,
+                content_hash=content_hash,
+                source_kind=source_kind,
+                content=content,
+            )
+
+    def get_document_revision(self, document_revision_id: str) -> DocumentRevision:
+        with self.sessions() as session:
+            row = session.get(DocumentRevisionRow, document_revision_id)
+            if row is None:
+                raise KeyError(f"document revision not found: {document_revision_id}")
+            return DocumentRevision(
+                id=row.id,
+                workflow_revision_id=row.workflow_revision_id,
+                verification_id=row.verification_id,
+                version=row.version,
+                content_hash=row.content_hash,
+                source_kind=row.source_kind,
+                content=DocumentContent.model_validate_json(row.content_json),
+            )
+
+    def add_review_decision(
+        self,
+        document_revision_id: str,
+        decision: ReviewDecision,
+        reviewer: str,
+        notes: str,
+    ) -> ReviewDecisionRow:
+        if not reviewer.strip():
+            raise ValueError("reviewer cannot be blank")
+        with self.sessions.begin() as session:
+            if session.get(DocumentRevisionRow, document_revision_id) is None:
+                raise KeyError(f"document revision not found: {document_revision_id}")
+            row = ReviewDecisionRow(
+                id=new_id(),
+                document_revision_id=document_revision_id,
+                decision=decision,
+                reviewer=reviewer.strip(),
+                notes=notes,
+                created_at=utc_now(),
+            )
+            session.add(row)
+            return row
+
+    def approved_document_revisions(self, project_id: str) -> list[DocumentRevision]:
+        with self.sessions() as session:
+            workflows = tuple(session.scalars(select(WorkflowRow).where(WorkflowRow.project_id == project_id)))
+            values: list[DocumentRevision] = []
+            for workflow in workflows:
+                workflow_revision = session.scalar(
+                    select(WorkflowRevisionRow)
+                    .where(WorkflowRevisionRow.workflow_id == workflow.id)
+                    .order_by(WorkflowRevisionRow.version.desc())
+                    .limit(1)
+                )
+                if workflow_revision is None:
+                    continue
+                document = session.scalar(
+                    select(DocumentRevisionRow)
+                    .where(DocumentRevisionRow.workflow_revision_id == workflow_revision.id)
+                    .order_by(DocumentRevisionRow.version.desc())
+                    .limit(1)
+                )
+                if document is None:
+                    continue
+                verification = session.scalar(
+                    select(VerificationRow)
+                    .where(VerificationRow.workflow_revision_id == workflow_revision.id)
+                    .order_by(VerificationRow.started_at.desc())
+                    .limit(1)
+                )
+                if (
+                    verification is None
+                    or verification.status != VerificationStatus.PASSED
+                    or document.verification_id != verification.id
+                ):
+                    continue
+                decision = session.scalar(
+                    select(ReviewDecisionRow)
+                    .where(ReviewDecisionRow.document_revision_id == document.id)
+                    .order_by(ReviewDecisionRow.created_at.desc())
+                    .limit(1)
+                )
+                if decision is None or decision.decision != ReviewDecision.APPROVED:
+                    continue
+                values.append(
+                    DocumentRevision(
+                        id=document.id,
+                        workflow_revision_id=document.workflow_revision_id,
+                        verification_id=document.verification_id,
+                        version=document.version,
+                        content_hash=document.content_hash,
+                        source_kind=document.source_kind,
+                        content=DocumentContent.model_validate_json(document.content_json),
+                    )
+                )
+            return values
+
+    def artifact_draft(self, artifact_id: str) -> ArtifactDraft:
+        with self.sessions() as session:
+            row = session.get(ArtifactRow, artifact_id)
+            if row is None:
+                raise KeyError(f"artifact not found: {artifact_id}")
+            return ArtifactDraft(
+                id=row.id,
+                relative_path=row.relative_path,
+                sha256=row.sha256,
+                media_type=row.media_type,
+                sensitivity=Sensitivity(row.sensitivity),
+                size_bytes=row.size_bytes,
+            )
+
+    def add_export(self, project_id: str, output_path: str, document_revision_ids: list[str]) -> ExportRow:
+        row = ExportRow(
+            id=new_id(),
+            project_id=project_id,
+            output_path=output_path,
+            document_revision_ids_json=json.dumps(document_revision_ids),
+            created_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            session.add(row)
+        return row
+
+    def documentation_coverage(self, project_id: str) -> dict[str, Any]:
+        with self.sessions() as session:
+            workflows = tuple(session.scalars(select(WorkflowRow).where(WorkflowRow.project_id == project_id)))
+            entries: list[dict[str, Any]] = []
+            verified_feature_ids: set[str] = set()
+            for workflow in workflows:
+                revision = session.scalar(
+                    select(WorkflowRevisionRow)
+                    .where(WorkflowRevisionRow.workflow_id == workflow.id)
+                    .order_by(WorkflowRevisionRow.version.desc())
+                    .limit(1)
+                )
+                if revision is None:
+                    continue
+                verification = session.scalar(
+                    select(VerificationRow)
+                    .where(VerificationRow.workflow_revision_id == revision.id)
+                    .order_by(VerificationRow.started_at.desc())
+                    .limit(1)
+                )
+                document = session.scalar(
+                    select(DocumentRevisionRow)
+                    .where(DocumentRevisionRow.workflow_revision_id == revision.id)
+                    .order_by(DocumentRevisionRow.version.desc())
+                    .limit(1)
+                )
+                decision = (
+                    session.scalar(
+                        select(ReviewDecisionRow)
+                        .where(ReviewDecisionRow.document_revision_id == document.id)
+                        .order_by(ReviewDecisionRow.created_at.desc())
+                        .limit(1)
+                    )
+                    if document is not None
+                    else None
+                )
+                definition = WorkflowDefinition.model_validate_json(revision.definition_json)
+                if verification is not None and verification.status == VerificationStatus.PASSED:
+                    verified_feature_ids.update(definition.source_feature_ids)
+                eligible = (
+                    verification is not None
+                    and verification.status == VerificationStatus.PASSED
+                    and document is not None
+                    and document.verification_id == verification.id
+                    and decision is not None
+                    and decision.decision == ReviewDecision.APPROVED
+                )
+                entries.append(
+                    {
+                        "workflow_key": workflow.workflow_key,
+                        "workflow_revision_id": revision.id,
+                        "verification": verification.status if verification is not None else "missing",
+                        "document_revision_id": document.id if document is not None else None,
+                        "review": decision.decision if decision is not None else "missing",
+                        "eligible_for_export": eligible,
+                        "unresolved_questions": definition.unresolved_questions,
+                    }
+                )
+            features = tuple(
+                session.scalars(
+                    select(FeatureRow)
+                    .join(RunRow, RunRow.id == FeatureRow.run_id)
+                    .where(RunRow.project_id == project_id)
+                    .order_by(FeatureRow.created_at)
+                )
+            )
+            feature_entries = [
+                {
+                    "id": feature.id,
+                    "title": feature.title,
+                    "run_id": feature.run_id,
+                    "verified": feature.id in verified_feature_ids,
+                }
+                for feature in features
+            ]
+            return {
+                "summary": {
+                    "workflows": len(entries),
+                    "exportable_workflows": sum(1 for entry in entries if entry["eligible_for_export"]),
+                    "features": len(feature_entries),
+                    "unverified_features": sum(1 for feature in feature_entries if not feature["verified"]),
+                },
+                "workflows": entries,
+                "features": feature_entries,
+            }
 
     def recover_interrupted(self, project_id: str) -> dict[str, int]:
         recovered_attempts = 0

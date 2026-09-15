@@ -50,19 +50,14 @@ class DocumentationService:
             role=context.role,
             goal=self._verified_claim(narrative.goal, outcome_reference),
             prerequisites=[
-                self._verified_claim(text, context.prerequisite_evidence)
-                for text in narrative.prerequisites
+                self._verified_claim(text, context.prerequisite_evidence) for text in narrative.prerequisites
             ],
             steps=[
                 DocumentStep(
                     sequence=step.sequence,
-                    instruction=self._verified_claim(
-                        step.instruction, context.evidence_by_step[step.sequence]
-                    ),
+                    instruction=self._verified_claim(step.instruction, context.evidence_by_step[step.sequence]),
                     expected_result=(
-                        self._verified_claim(
-                            step.expected_result, context.evidence_by_step[step.sequence]
-                        )
+                        self._verified_claim(step.expected_result, context.evidence_by_step[step.sequence])
                         if step.expected_result is not None
                         else None
                     ),
@@ -111,9 +106,7 @@ class DocumentationService:
         context = self._context(workflow_revision_id, verification_id)
         if content.role != context.role:
             raise ValueError("document role does not match the verified workflow role")
-        if [step.sequence for step in content.steps] != list(
-            range(1, len(context.step_descriptions) + 1)
-        ):
+        if [step.sequence for step in content.steps] != list(range(1, len(context.step_descriptions) + 1)):
             raise ValueError("document steps do not match the verified workflow")
         if len(content.prerequisites) != len(context.prerequisite_descriptions):
             raise ValueError("document prerequisites do not match the verified workflow")
@@ -134,16 +127,14 @@ class DocumentationService:
             self._validate_claim(claim, context.outcome_evidence, owner_ids, allow_owner=True)
 
     def _context(self, workflow_revision_id: str, verification_id: str | None) -> GenerationContext:
-        raw = self.repository.verification_evidence_context(workflow_revision_id, verification_id)
+        raw = self.repository.verification_evidence_context(self.project_id, workflow_revision_id, verification_id)
         workflow = raw["workflow"]
         evidence_by_step = {
-            int(key): EvidenceReference.model_validate(value)
-            for key, value in raw["step_evidence"].items()
+            int(key): EvidenceReference.model_validate(value) for key, value in raw["step_evidence"].items()
         }
         prerequisites = [_predicate_text(predicate) for predicate in workflow.prerequisites]
         step_expected = [
-            "; ".join(_predicate_text(predicate) for predicate in step.expected) or None
-            for step in workflow.steps
+            "; ".join(_predicate_text(predicate) for predicate in step.expected) or None for step in workflow.steps
         ]
         return GenerationContext(
             workflow_revision_id=workflow_revision_id,
@@ -154,17 +145,12 @@ class DocumentationService:
             prerequisite_descriptions=prerequisites,
             step_descriptions=[step.action.description for step in workflow.steps],
             step_expected_descriptions=step_expected,
-            outcome_description="; ".join(
-                _predicate_text(predicate) for predicate in workflow.final_outcomes
-            ),
+            outcome_description="; ".join(_predicate_text(predicate) for predicate in workflow.final_outcomes),
             unresolved_questions=workflow.unresolved_questions,
             evidence_by_step=evidence_by_step,
             prerequisite_evidence=EvidenceReference.model_validate(raw["prerequisite_evidence"]),
             outcome_evidence=EvidenceReference.model_validate(raw["outcome_evidence"]),
-            owner_sources={
-                source.id: source.content
-                for source in self.repository.list_owner_sources(self.project_id)
-            },
+            owner_sources={source.id: source.content for source in self.repository.list_owner_sources(self.project_id)},
         )
 
     @staticmethod

@@ -283,16 +283,16 @@ Generate readable guides whose instructions and behavioral claims can be traced 
 
 ### Implementation tasks
 
-- [ ] Define structured document schemas for goals, prerequisites, steps, outcomes, and troubleshooting.
-- [ ] Compose drafts from verified workflow revisions using the LLM.
-- [ ] Associate procedural claims and screenshots with evidence references.
-- [ ] Accept owner-provided terminology and business rules with explicit provenance.
-- [ ] Render Markdown using fixed, application-owned Jinja2 templates.
-- [ ] Generate a coverage report that identifies unverified features and unresolved questions.
-- [ ] Create a local review bundle with evidence links and versioned edits.
-- [ ] Record review decisions against exact document revisions.
-- [ ] Export reviewed guides and assets through MkDocs.
-- [ ] Preserve manual edits by creating new revisions during regeneration.
+- [x] Define structured document schemas for goals, prerequisites, steps, outcomes, and troubleshooting.
+- [x] Compose drafts from verified workflow revisions using the LLM.
+- [x] Associate procedural claims and screenshots with evidence references.
+- [x] Accept owner-provided terminology and business rules with explicit provenance.
+- [x] Render Markdown using fixed, application-owned Jinja2 templates.
+- [x] Generate a coverage report that identifies unverified features and unresolved questions.
+- [x] Create a local review bundle with evidence links and versioned edits.
+- [x] Record review decisions against exact document revisions.
+- [x] Export reviewed guides and assets through MkDocs.
+- [x] Preserve manual edits by creating new revisions during regeneration.
 
 ### Deliverables
 
@@ -311,6 +311,8 @@ Illustrated user guides, an evidence-backed review bundle, a coverage report, an
 - Have a person unfamiliar with the fixture complete at least 8/10 documented tasks without author assistance; record difficulties and corrections.
 
 Completion of this phase is the **documentation-producing MVP milestone**.
+
+Core implementation and deterministic local acceptance are complete. The documentation-producing MVP is usable; the unfamiliar-user 8/10 study and real-target reviewer assessment remain external acceptance gates and are not represented as passed.
 
 ## Phase 5 — Operational pilot and review interface
 

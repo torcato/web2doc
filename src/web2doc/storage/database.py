@@ -285,6 +285,74 @@ class PredicateResultRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class OwnerSourceRow(Base):
+    __tablename__ = "owner_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DocumentRevisionRow(Base):
+    __tablename__ = "document_revisions"
+    __table_args__ = (
+        UniqueConstraint("workflow_revision_id", "version", name="uq_document_revision_version"),
+        UniqueConstraint("workflow_revision_id", "content_hash", name="uq_document_revision_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workflow_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("workflow_revisions.id", ondelete="RESTRICT"), nullable=False
+    )
+    verification_id: Mapped[str] = mapped_column(ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(ForeignKey("document_revisions.id", ondelete="SET NULL"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DocumentEvidenceRow(Base):
+    __tablename__ = "document_evidence"
+    __table_args__ = (UniqueConstraint("document_revision_id", "claim_path", name="uq_document_evidence_claim"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    document_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    claim_path: Mapped[str] = mapped_column(String(200), nullable=False)
+    verification_id: Mapped[str] = mapped_column(ForeignKey("verifications.id", ondelete="RESTRICT"), nullable=False)
+    observation_id: Mapped[str] = mapped_column(ForeignKey("observations.id", ondelete="RESTRICT"), nullable=False)
+    screenshot_artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False)
+
+
+class ReviewDecisionRow(Base):
+    __tablename__ = "review_decisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    document_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("document_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(200), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExportRow(Base):
+    __tablename__ = "exports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    output_path: Mapped[str] = mapped_column(Text, nullable=False)
+    document_revision_ids_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def make_engine(database_path: Path) -> Engine:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{database_path}")

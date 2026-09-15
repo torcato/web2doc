@@ -33,28 +33,39 @@ class DocumentationPublisher:
 
     def create_review_bundle(self, document_revision_id: str) -> Path:
         document = self.repository.get_document_revision(document_revision_id)
+        self.repository.verification_evidence_context(
+            self.project_id, document.workflow_revision_id, document.verification_id
+        )
         _require_safe(document.id)
-        output = self.project_root / ".web2doc" / "review" / document.id
+        review_root = self.project_root / ".web2doc" / "review"
+        output = review_root / document.id
         if output.exists():
             raise FileExistsError(f"review bundle already exists: {output}")
-        output.mkdir(parents=True)
-        self._write_document_files(output, document, evidence_prefix="")
-        (output / "document.json").write_text(document.content.model_dump_json(indent=2), encoding="utf-8")
-        (output / "REVIEW.md").write_text(
-            "\n".join(
-                [
-                    "# Review record",
-                    "",
-                    f"- Document revision: `{document.id}`",
-                    f"- Workflow revision: `{document.workflow_revision_id}`",
-                    f"- Verification: `{document.verification_id}`",
-                    "",
-                    "Review factual support as well as readability. Evidence existence alone does not prove the claim.",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
+        review_root.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=".bundle-", dir=review_root))
+        try:
+            self._write_document_files(temporary, document, evidence_prefix="")
+            (temporary / "document.json").write_text(document.content.model_dump_json(indent=2), encoding="utf-8")
+            (temporary / "REVIEW.md").write_text(
+                "\n".join(
+                    [
+                        "# Review record",
+                        "",
+                        f"- Document revision: `{document.id}`",
+                        f"- Workflow revision: `{document.workflow_revision_id}`",
+                        f"- Verification: `{document.verification_id}`",
+                        "",
+                        "Review factual support as well as readability. "
+                        "Evidence existence alone does not prove the claim.",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temporary, output)
+        except BaseException:
+            _remove_temporary_tree(temporary)
+            raise
         return output
 
     def export_approved(self, output_dir: Path) -> Path:
@@ -76,16 +87,12 @@ class DocumentationPublisher:
                 key = workflow.definition.workflow_key
                 _require_safe(key)
                 guide = guides / f"{key}.md"
-                guide.write_text(
-                    self.renderer.render(document.content, evidence_prefix="../"), encoding="utf-8"
-                )
+                guide.write_text(self.renderer.render(document.content, evidence_prefix="../"), encoding="utf-8")
                 self._write_evidence(docs_root, document)
                 navigation.append({document.content.title: f"guides/{key}.md"})
             index_lines = ["# User documentation", ""]
             index_lines.extend(
-                f"- [{markdown_escape(title)}]({path})"
-                for item in navigation
-                for title, path in item.items()
+                f"- [{markdown_escape(title)}]({path})" for item in navigation for title, path in item.items()
             )
             (docs_root / "index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
             config = {
@@ -114,9 +121,54 @@ class DocumentationPublisher:
         )
         return target
 
-    def _write_document_files(
-        self, root: Path, document: DocumentRevision, *, evidence_prefix: str
-    ) -> None:
+    def write_coverage_report(self) -> tuple[Path, Path]:
+        review_root = self.project_root / ".web2doc" / "review"
+        review_root.mkdir(parents=True, exist_ok=True)
+        report = self.repository.documentation_coverage(self.project_id)
+        json_path = review_root / "coverage.json"
+        markdown_path = review_root / "coverage.md"
+        json_temporary = review_root / ".coverage.json.pending"
+        markdown_temporary = review_root / ".coverage.md.pending"
+        entries = report["workflows"]
+        lines = [
+            "# Documentation coverage",
+            "",
+            "| Workflow | Verification | Document | Review | Exportable | Unresolved |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+        for entry in entries:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        markdown_escape(entry["workflow_key"]),
+                        markdown_escape(entry["verification"]),
+                        markdown_escape(entry["document_revision_id"] or "missing"),
+                        markdown_escape(entry["review"]),
+                        "yes" if entry["eligible_for_export"] else "no",
+                        markdown_escape("; ".join(entry["unresolved_questions"]) or "none"),
+                    ]
+                )
+                + " |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Discovered features",
+                "",
+                "| Feature | Verified workflow |",
+                "| --- | --- |",
+            ]
+        )
+        for feature in report["features"]:
+            lines.append(f"| {markdown_escape(feature['title'])} | {'yes' if feature['verified'] else 'no'} |")
+        json_temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        markdown_temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(json_temporary, json_path)
+        os.replace(markdown_temporary, markdown_path)
+        return json_path, markdown_path
+
+    def _write_document_files(self, root: Path, document: DocumentRevision, *, evidence_prefix: str) -> None:
         (root / "guide.md").write_text(
             self.renderer.render(document.content, evidence_prefix=evidence_prefix), encoding="utf-8"
         )

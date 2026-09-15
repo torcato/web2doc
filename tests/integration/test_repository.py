@@ -38,6 +38,11 @@ def test_migration_creates_expected_schema(tmp_path: Path) -> None:
         "fixture_receipts",
         "verifications",
         "predicate_results",
+        "owner_sources",
+        "document_revisions",
+        "document_evidence",
+        "review_decisions",
+        "exports",
     } <= tables
 
 
@@ -48,7 +53,7 @@ def test_migration_can_upgrade_the_same_database_twice(tmp_path: Path) -> None:
     upgrade_database(database)
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0003_phase3",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0004_phase4",)
 
 
 def test_phase_one_database_upgrades_without_losing_runs(tmp_path: Path, project_config) -> None:
@@ -76,6 +81,38 @@ def test_phase_one_database_upgrades_without_losing_runs(tmp_path: Path, project
         assert connection.execute("SELECT procedure_name, stage FROM runs WHERE id = 'run'").fetchone() == (
             "Existing run",
             "capture",
+        )
+
+
+def test_phase_three_database_upgrades_without_losing_workflow_revisions(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    upgrade_database(database, revision="0003_phase3")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO projects (id, name, root_path, created_at) VALUES (?, ?, ?, ?)",
+            ("project", "Existing", str(tmp_path), "2026-09-15"),
+        )
+        connection.execute(
+            "INSERT INTO roles (id, project_id, name, storage_state) VALUES (?, ?, ?, ?)",
+            ("role", "project", "admin", None),
+        )
+        connection.execute(
+            "INSERT INTO workflows (id, project_id, workflow_key, title, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("workflow", "project", "existing", "Existing workflow", "2026-09-15"),
+        )
+        connection.execute(
+            """INSERT INTO workflow_revisions
+               (id, workflow_id, role_id, parent_revision_id, version, content_hash, definition_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("revision", "workflow", "role", None, 1, "0" * 64, "{}", "2026-09-15"),
+        )
+
+    upgrade_database(database)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT id, version FROM workflow_revisions WHERE id = 'revision'").fetchone() == (
+            "revision",
+            1,
         )
 
 

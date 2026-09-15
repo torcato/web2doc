@@ -15,6 +15,11 @@ class ReviewDecision(StrEnum):
     REJECTED = "rejected"
 
 
+class OwnerSourceKind(StrEnum):
+    TERMINOLOGY = "terminology"
+    BUSINESS_RULE = "business_rule"
+
+
 class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -99,7 +104,7 @@ class DocumentRevision(BaseModel):
 class OwnerSourceDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_kind: str = Field(pattern=r"^(terminology|business_rule)$")
+    source_kind: OwnerSourceKind
     label: str = Field(min_length=1, max_length=200)
     content: str = Field(min_length=1, max_length=10_000)
 
