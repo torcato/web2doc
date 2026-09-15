@@ -1,0 +1,48 @@
+{
+  "workflow_key": "create-item",
+  "title": "Create an item",
+  "goal": "Create an item and confirm that it was persisted",
+  "role": "default",
+  "scenario": "default",
+  "prerequisites": [
+    {
+      "kind": "control",
+      "target": {"role": "button", "name": "Create"},
+      "present": true,
+      "enabled": true
+    }
+  ],
+  "test_inputs": {"item_name": "Documentation example"},
+  "steps": [
+    {
+      "action": {
+        "kind": "fill",
+        "description": "Enter the item name",
+        "target": {"label": "Item name"},
+        "value": "{{item_name}}"
+      },
+      "expected": []
+    },
+    {
+      "action": {
+        "kind": "click",
+        "description": "Create the item",
+        "effect": "write",
+        "operation_id": "create-item",
+        "target": {"role": "button", "name": "Create"}
+      },
+      "expected": [
+        {"kind": "visible_text", "text": "Documentation example"},
+        {
+          "kind": "environment_json",
+          "path": "items",
+          "operator": "contains",
+          "expected": "Documentation example"
+        }
+      ]
+    }
+  ],
+  "final_outcomes": [{"kind": "title", "expected": "Created"}],
+  "unresolved_questions": [],
+  "source_feature_ids": []
+}

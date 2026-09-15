@@ -1,0 +1,47 @@
+# {{ document.title | md }}
+
+{{ document.summary.text | md }} [Evidence]({{ evidence_prefix }}evidence/{{ document.summary.evidence[0].observation_id }}.md)
+
+**Role:** {{ document.role | md }}
+
+## Goal
+
+{{ document.goal.text | md }} [Evidence]({{ evidence_prefix }}evidence/{{ document.goal.evidence[0].observation_id }}.md)
+
+{% if document.prerequisites %}
+## Before you begin
+
+{% for claim in document.prerequisites %}
+- {{ claim.text | md }}{% if claim.provenance.value == "verified" %} [Evidence]({{ evidence_prefix }}evidence/{{ claim.evidence[0].observation_id }}.md){% else %} _(Owner source {{ claim.owner_source_id | md }})_{% endif %}
+{% endfor %}
+{% endif %}
+## Procedure
+
+{% for step in document.steps %}
+### {{ step.sequence }}. {{ step.instruction.text | md }}
+
+{% if step.expected_result %}Expected result: {{ step.expected_result.text | md }}
+
+{% endif %}[Evidence]({{ evidence_prefix }}evidence/{{ step.instruction.evidence[0].observation_id }}.md)
+
+![Evidence for step {{ step.sequence }}]({{ evidence_prefix }}assets/{{ step.instruction.evidence[0].screenshot_artifact_id }}.png)
+
+{% endfor %}
+## Expected outcome
+
+{{ document.outcome.text | md }} [Evidence]({{ evidence_prefix }}evidence/{{ document.outcome.evidence[0].observation_id }}.md)
+
+{% if document.troubleshooting %}
+## Troubleshooting
+
+{% for claim in document.troubleshooting %}
+- {{ claim.text | md }} _(Owner source {{ claim.owner_source_id | md }})_
+{% endfor %}
+{% endif %}
+{% if document.owner_notes %}
+## Owner-provided notes
+
+{% for claim in document.owner_notes %}
+- {{ claim.text | md }} _(Owner source {{ claim.owner_source_id | md }})_
+{% endfor %}
+{% endif %}
