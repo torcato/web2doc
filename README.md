@@ -142,3 +142,34 @@ uv run web2doc docs-export demo ./published-documentation
 ```
 
 Exports never overwrite an existing destination. A newer failed or inconclusive verification, a newer unreviewed edit, missing evidence, or an artifact hash mismatch makes the affected guide ineligible for export.
+
+## End-to-end documentation generation
+
+For the normal user-documentation path, use the bundled helper. It runs unguided discovery, turns the results into
+concise user tasks, verifies every drafted task, generates documentation for passing tasks, creates review bundles,
+and writes a coverage report:
+
+```bash
+# Install jq with your platform's package manager first.
+chmod +x scripts/generate-docs.sh
+./scripts/generate-docs.sh demo --max-actions 100 --max-states 50
+```
+
+The target application must already be running and `demo/project.toml` must contain the correct origins and policy.
+Use `--headed` to watch the browser, `--role ROLE` for another authenticated role, and
+`--trusted-fixture-api` only when the target intentionally exposes the documented fixture endpoints.
+Add `--model PROVIDER:MODEL` to use a Pydantic AI planner; omit it for deterministic discovery.
+
+The helper does not approve documents automatically. After inspecting each printed review bundle, approve the exact
+document revision and export the approved set:
+
+```bash
+uv run web2doc document-review demo DOCUMENT_REVISION_ID \
+  --decision approved \
+  --reviewer "Documentation owner" \
+  --notes "Claims checked against evidence"
+uv run web2doc docs-export demo ./published-documentation
+```
+
+The helper requires `jq` and leaves runtime evidence, workflow revisions, and generated bundles under
+`demo/.web2doc/`. A failed or inconclusive task is reported and skipped so passing tasks can still produce drafts.
