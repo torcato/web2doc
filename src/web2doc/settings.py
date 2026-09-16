@@ -25,6 +25,10 @@ class RuntimeSettings(BaseSettings):
     browser_channel: str | None = None
     browser_executable_path: Path | None = None
     browser_slow_mo_ms: int = Field(default=0, ge=0, le=10_000)
+    browser_http_username: str | None = None
+    browser_http_password: str | None = None
+    browser_login_username: str | None = None
+    browser_login_password: str | None = None
     llm_model: str | None = None
     discovery_model: str | None = None
     documentation_model: str | None = None

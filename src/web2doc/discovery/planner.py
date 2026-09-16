@@ -77,7 +77,7 @@ class HeuristicPlanner:
                 candidate_id=candidate.id,
                 rationale="Visible control ranked by its value to end-user documentation.",
                 priority=max(1, _documentation_priority(candidate) - index),
-                feature_title=candidate.label,
+                feature_title=candidate.label.strip()[:200],
                 feature_description=f"Candidate capability exposed by the {candidate.action.kind} control.",
             )
             for index, candidate in enumerate(ordered)

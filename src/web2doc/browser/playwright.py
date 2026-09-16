@@ -88,6 +88,15 @@ class PlaywrightBrowser:
                 "locale": "en-US",
                 "timezone_id": "UTC",
             }
+            if self.settings.browser_http_username or self.settings.browser_http_password:
+                if not self.settings.browser_http_username or not self.settings.browser_http_password:
+                    raise ValueError(
+                        "WEB2DOC_BROWSER_HTTP_USERNAME and WEB2DOC_BROWSER_HTTP_PASSWORD must be set together"
+                    )
+                context_options["http_credentials"] = {
+                    "username": self.settings.browser_http_username,
+                    "password": self.settings.browser_http_password,
+                }
             if self.role.storage_state:
                 storage_path = (self.project_root / self.role.storage_state).resolve()
                 if not storage_path.is_relative_to(self.project_root):
@@ -243,7 +252,10 @@ class PlaywrightBrowser:
 
     async def _inject_synthetic_labels(self, page: Page) -> None:
         await page.evaluate("""
-            document.querySelectorAll('button, a, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="switch"], [role="tab"]').forEach((el) => {
+            document.querySelectorAll(
+                'button, a, [role="button"], [role="link"], [role="menuitem"], '
+                + '[role="option"], [role="switch"], [role="tab"]'
+            ).forEach((el) => {
                 // Ignore hidden elements so they don't shift indices when a modal is closed
                 if (el.offsetWidth === 0 && el.offsetHeight === 0) return;
                 

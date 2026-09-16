@@ -51,6 +51,15 @@ async def test_heuristic_planner_prioritizes_documentable_tasks_over_cosmetic_co
     assert ordered_labels == ["Chat settings", "New chat", "Attach file", "Toggle theme", "Readme", "Cancel"]
 
 
+@pytest.mark.asyncio
+async def test_heuristic_planner_bounds_feature_titles_from_page_labels() -> None:
+    oversized = candidate().model_copy(update={"label": "Long menu " * 100})
+
+    result = await HeuristicPlanner().propose(model_observation(), [oversized], max_output_tokens=500)
+
+    assert len(result.output.proposals[0].feature_title) == 200
+
+
 def test_budget_reserves_model_capacity_conservatively() -> None:
     tracker = BudgetTracker(DiscoveryLimits(max_model_calls=1, max_output_tokens=10, max_tokens_per_call=10))
 

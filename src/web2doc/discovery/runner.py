@@ -584,8 +584,13 @@ class ExplorationRunner[SessionT]:
 
     def _authentication_required(self, draft: ObservationDraft) -> bool:
         route = draft.url.lower()
-        return any(control.input_type == "password" for control in draft.controls) or any(
+        title = draft.title.casefold()
+        return (
+            any(control.input_type == "password" for control in draft.controls)
+            or any(marker in title for marker in ("401 unauthorized", "403 forbidden"))
+            or any(
             marker in route for marker in ("/login", "/signin", "/sign-in")
+            )
         )
 
     def _stop(self, run_id: str, reason: DiscoveryStop) -> None:

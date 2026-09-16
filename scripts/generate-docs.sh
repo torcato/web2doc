@@ -104,6 +104,8 @@ echo "Drafted $WORKFLOW_COUNT task(s)."
 echo "[3/5] Verifying each drafted task..."
 PASSED=0
 GENERATED=0
+GENERATED_IDS=()
+GENERATED_TITLES=()
 while IFS= read -r REVISION_ID; do
   [[ -z "$REVISION_ID" ]] && continue
   VERIFY_JSON=$(run_cli verify "$PROJECT_DIR" "$REVISION_ID" "${VERIFY_ARGS[@]}")
@@ -119,7 +121,12 @@ while IFS= read -r REVISION_ID; do
   echo "[4/5] Generating documentation: $TITLE"
   DOCUMENT_JSON=$(run_cli document-generate "$PROJECT_DIR" "$REVISION_ID" --verification "$VERIFY_ID")
   DOCUMENT_ID=$(jq -r '.id' <<<"$DOCUMENT_JSON")
+  DOCUMENT_VERSION=$(jq -r '.version' <<<"$DOCUMENT_JSON")
   BUNDLE_PATH=$(run_cli document-bundle "$PROJECT_DIR" "$DOCUMENT_ID")
+  GENERATED_IDS+=("$DOCUMENT_ID")
+  GENERATED_TITLES+=("$TITLE")
+  echo "  Workflow revision: $REVISION_ID"
+  echo "  Document revision: $DOCUMENT_ID (version $DOCUMENT_VERSION)"
   echo "  Review bundle: $BUNDLE_PATH"
   GENERATED=$((GENERATED + 1))
 done < <(jq -r '.[].id' "$TMP_DIR/workflows.json")
@@ -130,8 +137,15 @@ run_cli documentation-coverage "$PROJECT_DIR" | jq '{json_path, markdown_path}'
 echo
 echo "Completed: $GENERATED generated document(s) from $PASSED passing verification(s)."
 echo "Each document needs owner review before it can be exported."
-echo "Review with:"
-echo "  uv run web2doc document-review $PROJECT_DIR DOCUMENT_REVISION_ID \\"
-echo "    --decision approved --reviewer \"Name\" --notes \"Reviewed against evidence\""
+if [[ "$GENERATED" -gt 0 ]]; then
+  echo "Ready-to-run review commands:"
+  for INDEX in "${!GENERATED_IDS[@]}"; do
+    echo
+    echo "  # ${GENERATED_TITLES[$INDEX]}"
+    printf '  uv run web2doc document-review %q %q --decision approved --reviewer "Documentation owner" --notes "Reviewed against evidence"\n' \
+      "$PROJECT_DIR" "${GENERATED_IDS[$INDEX]}"
+  done
+fi
+echo
 echo "Then export approved guides with:"
 echo "  uv run web2doc docs-export $PROJECT_DIR ./published-documentation"

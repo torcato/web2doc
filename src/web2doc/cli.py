@@ -48,6 +48,44 @@ def _open_project(
     return config, repository, project_id, roles
 
 
+def _verify_revision(
+    *,
+    project_dir: Path,
+    config: ProjectConfig,
+    repository: Repository,
+    project_id: str,
+    role_id: str,
+    revision_id: str,
+    trusted_fixture_api: bool = False,
+    headed: bool = False,
+) -> dict[str, object]:
+    revision = repository.get_workflow_revision(revision_id)
+    role = revision.definition.role
+    environment = (
+        HttpJsonEnvironmentAdapter(base_url=str(config.base_url), allowed_origins=config.allowed_origins)
+        if trusted_fixture_api
+        else None
+    )
+    runner = VerificationRunner(
+        repository=repository,
+        artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+        browser=PlaywrightBrowser(
+            project_root=project_dir,
+            config=config,
+            role=config.role(role),
+            settings=load_runtime_settings(project_dir),
+        ),
+        policy=ActionPolicy(config),
+        environment=environment,
+        project_id=project_id,
+        role_id=role_id,
+        role_name=role,
+        base_url=str(config.base_url),
+    )
+    verification_id = asyncio.run(runner.run(revision, headed=headed))
+    return repository.verification_report(verification_id)
+
+
 @app.command()
 def init(
     name: Annotated[str, typer.Argument(help="Project name")],
@@ -111,7 +149,10 @@ def discover(
     headed: Annotated[bool, typer.Option("--headed")] = False,
     strict: Annotated[
         bool | None,
-        typer.Option("--strict/--no-strict", help="Fail fast on execution errors. Defaults to true for supplied, false for unguided")
+        typer.Option(
+            "--strict/--no-strict",
+            help="Fail fast on execution errors. Defaults to true for supplied, false for unguided",
+        ),
     ] = None,
 ) -> None:
     config, repository, project_id, roles = _open_project(project_dir)
@@ -421,6 +462,186 @@ def docs_export(
         repository.close()
 
 
+@app.command("docs-generate")
+def docs_generate(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    output_dir: Annotated[Path, typer.Argument(help="New export directory")],
+    role: Annotated[str, typer.Option("--role")] = "default",
+    reviewer: Annotated[
+        str, typer.Option("--reviewer", help="Reviewer recorded for automatic approval")
+    ] = "Documentation owner",
+    notes: Annotated[
+        str, typer.Option("--notes", help="Review note recorded for automatic approval")
+    ] = "Automatically generated and reviewed",
+    model: Annotated[str | None, typer.Option("--model", help="Pydantic AI discovery model")] = None,
+    max_actions: Annotated[int | None, typer.Option("--max-actions", min=1)] = None,
+    max_states: Annotated[int | None, typer.Option("--max-states", min=1)] = None,
+    max_seconds: Annotated[int | None, typer.Option("--max-seconds", min=1)] = None,
+    trusted_fixture_api: Annotated[
+        bool,
+        typer.Option("--trusted-fixture-api", help="Use same-origin fixture endpoints during verification"),
+    ] = False,
+    headed: Annotated[bool, typer.Option("--headed")] = False,
+) -> None:
+    """Discover, verify, approve, generate, and export user documentation in one operation."""
+
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        settings = load_runtime_settings(project_dir)
+        selected_model = settings.model_for_discovery(model)
+        planner = PydanticAIPlanner(selected_model) if selected_model else HeuristicPlanner()
+        overrides = {
+            key: value
+            for key, value in {
+                "max_actions": max_actions,
+                "max_states": max_states,
+                "max_duration_seconds": max_seconds,
+            }.items()
+            if value is not None
+        }
+        limits = config.discovery.limits.model_copy(update=overrides)
+        runner = ExplorationRunner(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            browser=PlaywrightBrowser(
+                project_root=project_dir,
+                config=config,
+                role=config.role(role),
+                settings=settings,
+            ),
+            policy=ActionPolicy(config),
+            planner=planner,
+            config=config,
+            project_id=project_id,
+            role_id=roles[role],
+            role_name=role,
+        )
+        discovery_run_id = asyncio.run(
+            runner.run(mode=DiscoveryMode.UNGUIDED, headed=headed, limits=limits)
+        )
+        discovery_report = repository.discovery_report(discovery_run_id)
+        run_info = discovery_report["run"]
+        if isinstance(run_info, dict) and run_info.get("stop_reason") == "authentication_required":
+            typer.echo(
+                "Discovery could not authenticate to the application. "
+                f"Run `uv run web2doc auth-login {project_dir} --role {role}` and verify the "
+                "logged-in dashboard appears, or set "
+                "WEB2DOC_BROWSER_LOGIN_USERNAME and WEB2DOC_BROWSER_LOGIN_PASSWORD.",
+                err=True,
+            )
+            typer.echo(
+                f"Review discovery run {discovery_run_id} with: "
+                f"uv run web2doc discovery-report {project_dir} {discovery_run_id}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        if isinstance(run_info, dict) and str(run_info.get("stop_reason", "")).startswith(
+            "planner_failed:"
+        ):
+            typer.echo(f"Discovery planner failed: {run_info['stop_reason']}", err=True)
+            typer.echo(
+                f"Review discovery run {discovery_run_id} with: "
+                f"uv run web2doc discovery-report {project_dir} {discovery_run_id}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        definitions = draft_workflows(repository, discovery_run_id=discovery_run_id, role=role)
+        documentation_model = settings.model_for_documentation()
+        generated: list[dict[str, object]] = []
+        for definition in definitions:
+            revision = repository.add_workflow_revision(
+                project_id=project_id,
+                role_id=roles[role],
+                definition=definition,
+            )
+            verification = _verify_revision(
+                project_dir=project_dir,
+                config=config,
+                repository=repository,
+                project_id=project_id,
+                role_id=roles[role],
+                revision_id=revision.id,
+                trusted_fixture_api=trusted_fixture_api,
+                headed=headed,
+            )
+            if verification["status"] != "passed":
+                generated.append(
+                    {
+                        "title": definition.title,
+                        "workflow_revision_id": revision.id,
+                        "verification_id": verification["id"],
+                        "status": verification["status"],
+                    }
+                )
+                continue
+            document = asyncio.run(
+                DocumentationService(repository, project_id, config.description).generate(
+                    revision.id,
+                    PydanticAIDocumentComposer(documentation_model)
+                    if documentation_model
+                    else DeterministicComposer(),
+                    verification_id=str(verification["id"]),
+                )
+            )
+            repository.add_review_decision(document.id, ReviewDecision.APPROVED, reviewer, notes)
+            generated.append(
+                {
+                    "title": definition.title,
+                    "workflow_revision_id": revision.id,
+                    "verification_id": verification["id"],
+                    "document_revision_id": document.id,
+                    "document_version": document.version,
+                    "status": "approved",
+                }
+            )
+        # Bulk approval also includes previously generated documents that are still
+        # the latest revision with a passing verification. This makes regeneration
+        # idempotent and prevents older passing guides from disappearing from export.
+        bulk_approved: list[str] = []
+        coverage = repository.documentation_coverage(project_id)
+        for entry in coverage["workflows"]:
+            if not isinstance(entry, dict):
+                continue
+            document_id = entry.get("document_revision_id")
+            if (
+                entry.get("verification") == "passed"
+                and isinstance(document_id, str)
+                and entry.get("review") != "approved"
+            ):
+                repository.add_review_decision(document_id, ReviewDecision.APPROVED, reviewer, notes)
+                bulk_approved.append(document_id)
+        try:
+            exported = DocumentationPublisher(
+                repository=repository,
+                artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+                project_id=project_id,
+                project_root=project_dir,
+            ).export_approved(output_dir)
+        except ValueError as exc:
+            if str(exc) == "no latest document revisions have an approving review decision":
+                typer.echo(
+                    "No documents were eligible for export. "
+                    f"Review discovery run {discovery_run_id} with: "
+                    f"uv run web2doc discovery-report {project_dir} {discovery_run_id}",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
+            raise
+        typer.echo(
+            json.dumps(
+                {
+                    "discovery_run_id": discovery_run_id,
+                    "documents": generated,
+                    "bulk_approved_document_ids": bulk_approved,
+                    "export": str(exported),
+                },
+                indent=2,
+            )
+        )
+    finally:
+        repository.close()
+
+
 @app.command()
 def status(
     project_dir: Annotated[Path, typer.Argument(help="Project directory")],
@@ -464,24 +685,60 @@ def recover(project_dir: Annotated[Path, typer.Argument(help="Project directory"
 def auth_login(
     project_dir: Annotated[Path, typer.Argument(help="Project directory")],
     role: Annotated[str, typer.Option("--role")] = "default",
+    headed: Annotated[
+        bool,
+        typer.Option(
+            "--headed",
+            help="Show the browser. Automated login is headless by default to match other commands.",
+        ),
+    ] = False,
 ) -> None:
     async def capture() -> Path:
         config = load_project(project_dir)
+        settings = load_runtime_settings(project_dir)
+        has_username = bool(settings.browser_login_username)
+        has_password = bool(settings.browser_login_password)
+        if has_username != has_password:
+            raise ValueError(
+                "WEB2DOC_BROWSER_LOGIN_USERNAME and WEB2DOC_BROWSER_LOGIN_PASSWORD "
+                "must be set together"
+            )
+        automated = has_username and has_password
         browser = PlaywrightBrowser(
             project_root=project_dir,
             config=config,
             role=config.role(role),
-            settings=load_runtime_settings(project_dir),
+            settings=settings,
         )
-        session = await browser.start(run_id=f"auth-{role}", headed=True)
+        # Some applications bind their server-side session to the browser user
+        # agent. Match the default headless mode used by discovery when login can
+        # be automated; an interactive login still needs a visible browser.
+        session = await browser.start(run_id=f"auth-{role}", headed=headed or not automated)
         try:
             await session.page.goto(str(config.base_url), wait_until="domcontentloaded")
-            await asyncio.to_thread(
-                typer.prompt,
-                "Complete login in the browser, then press Enter",
-                default="",
-                show_default=False,
-            )
+            if automated:
+                page = session.page
+                login_form = page.locator('form[name="login"], input[name="login_member_name"]')
+                if await login_form.count():
+                    password = page.locator('input[type="password"]').first
+                    username = page.locator('input:not([type="password"])').first
+                    await username.fill(settings.browser_login_username or "")
+                    await password.fill(settings.browser_login_password or "")
+                    submit = page.locator('button[type="submit"], input[type="submit"]').first
+                    await submit.click()
+                    await page.wait_for_load_state("domcontentloaded")
+                if await login_form.count():
+                    raise RuntimeError(
+                        "application login failed: the login form is still visible; "
+                        "check WEB2DOC_BROWSER_LOGIN_USERNAME/PASSWORD"
+                    )
+            else:
+                await asyncio.to_thread(
+                    typer.prompt,
+                    "Complete login in the browser, then press Enter",
+                    default="",
+                    show_default=False,
+                )
             return await browser.save_authentication(session)
         finally:
             await browser.close(session)
