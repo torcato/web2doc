@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -145,6 +146,8 @@ class PlaywrightBrowser:
     async def observe(self, session: PlaywrightSession) -> ObservationDraft:
         await self._check_open_pages(session)
         await self._inject_synthetic_labels(session.page)
+        with suppress(PlaywrightTimeoutError):
+            await session.page.wait_for_load_state("networkidle", timeout=3_000)
         
         body = session.page.locator("body")
         try:
@@ -167,8 +170,17 @@ class PlaywrightBrowser:
                   const popups = visibleRegions('[role="listbox"], [role="menu"]');
                   const dialogs = visibleRegions('[role="dialog"], dialog[open]');
                   const activeRegion = popups.at(-1) || dialogs.at(-1) || null;
+                  const hiddenNavigationLink = element => element.matches('a[href]') && Boolean(
+                    element.closest(
+                      'nav, [role="navigation"], [id*="menu" i], '
+                      + '[class~="menu"], [class*="menu-"], [class*="_menu"]'
+                    )
+                  );
                   return elements
-                    .filter(element => visible(element) && (!activeRegion || activeRegion.contains(element)))
+                    .filter(element => (
+                      (visible(element) || hiddenNavigationLink(element)) &&
+                      (!activeRegion || activeRegion.contains(element))
+                    ))
                     .map(element => {
                   const tag = element.tagName.toLowerCase();
                   const inputType = tag === "input" ? (element.getAttribute("type") || "text").toLowerCase() : null;
@@ -201,9 +213,11 @@ class PlaywrightBrowser:
                     : null;
                   const descendantName = element.querySelector("img[alt]")?.getAttribute("alt") ||
                     element.querySelector("svg title")?.textContent?.trim();
+                  const textName = tag === "select" ? null : element.textContent?.trim();
                   const name = labelledBy || element.getAttribute("aria-label") || label ||
-                    element.textContent?.trim() || valueName || descendantName ||
-                    element.getAttribute("title") || element.getAttribute("placeholder") || "";
+                    textName || valueName || descendantName || element.getAttribute("title") ||
+                    element.getAttribute("placeholder") || element.getAttribute("name") ||
+                    element.getAttribute("id") || "";
                   return {
                     role,
                     name: name.slice(0, 300),

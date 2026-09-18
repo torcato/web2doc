@@ -112,6 +112,8 @@ def test_candidate_enumeration_excludes_dismissive_controls_as_tasks() -> None:
             ControlDraft(role="button", name="Close"),
             ControlDraft(role="button", name="Cancel"),
             ControlDraft(role="button", name="Reset"),
+            ControlDraft(role="link", name="Se déconnecter", href="/logout"),
+            ControlDraft(role="link", name="Version mobile", href="/?lodur_version=mobile"),
             ControlDraft(role="button", name="Confirm"),
         ],
     )

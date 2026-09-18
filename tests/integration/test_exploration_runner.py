@@ -281,6 +281,30 @@ async def test_action_budget_stops_before_second_action(repository, tmp_path, pr
 
 
 @pytest.mark.asyncio
+async def test_budget_exhausted_discovery_can_resume_existing_frontier(
+    repository, tmp_path, project_config
+) -> None:
+    browser = DiscoveryBrowser()
+    runner = make_runner(repository, tmp_path, project_config, browser, HeuristicPlanner())
+    run_id = await runner.run(
+        mode=DiscoveryMode.UNGUIDED,
+        limits=DiscoveryLimits(max_actions=1),
+    )
+
+    resumed_run_id = await runner.resume(
+        run_id,
+        additional_limits=DiscoveryLimits(max_actions=5),
+    )
+    report = repository.discovery_report(run_id)
+
+    assert resumed_run_id == run_id
+    assert report["run"]["stop_reason"] == "frontier_exhausted"
+    assert report["coverage"]["frontier"] == {"explored": 1}
+    assert report["coverage"]["states"] == 2
+    assert browser.executed == ["navigate", "navigate", "click"]
+
+
+@pytest.mark.asyncio
 async def test_planner_retries_are_bounded_and_usage_is_conservative(repository, tmp_path, project_config) -> None:
     browser = DiscoveryBrowser()
     planner = FailingPlanner()

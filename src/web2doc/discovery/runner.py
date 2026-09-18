@@ -42,6 +42,14 @@ from web2doc.storage.repository import Repository
 
 ACTION_ADAPTER: TypeAdapter[Action] = TypeAdapter(Action)
 ACTION_LIST_ADAPTER: TypeAdapter[list[Action]] = TypeAdapter(list[Action])
+BUDGET_STOPS = {
+    DiscoveryStop.ACTION_BUDGET,
+    DiscoveryStop.STATE_BUDGET,
+    DiscoveryStop.TIME_BUDGET,
+    DiscoveryStop.MODEL_CALL_BUDGET,
+    DiscoveryStop.TOKEN_BUDGET,
+}
+RESUMABLE_STOPS = BUDGET_STOPS | {DiscoveryStop.AUTHENTICATION_REQUIRED}
 
 
 def _action_signature(action: Action) -> str:
@@ -169,6 +177,98 @@ class ExplorationRunner[SessionT]:
                 if locked:
                     self.repository.release_project_lock(self.project_id, run.id)
 
+    async def resume(
+        self,
+        run_id: str,
+        *,
+        headed: bool = False,
+        additional_limits: DiscoveryLimits | None = None,
+    ) -> str:
+        run = self.repository.get_run(run_id)
+        if run is None:
+            raise KeyError(f"run not found: {run_id}")
+        if run.project_id != self.project_id or run.role_id != self.role_id:
+            raise ValueError("discovery run does not belong to the selected project and role")
+        if run.stage != "discovery" or run.discovery_mode != DiscoveryMode.UNGUIDED:
+            raise ValueError("only unguided discovery runs can be resumed")
+        if run.stop_reason not in RESUMABLE_STOPS:
+            raise ValueError(
+                f"discovery run cannot be resumed from stop reason {run.stop_reason!r}; "
+                "only exhausted budget or authentication-paused runs are resumable"
+            )
+
+        added = additional_limits or self.config.discovery.limits
+        usage = self.repository.discovery_usage(run_id)
+        effective_limits = added.model_copy(
+            update={
+                "max_actions": usage["actions"] + added.max_actions,
+                "max_states": usage["states"] + added.max_states,
+                "max_model_calls": usage["model_calls"] + added.max_model_calls,
+                "max_output_tokens": usage["output_tokens"] + added.max_output_tokens,
+            }
+        )
+        budget = BudgetTracker(
+            effective_limits,
+            actions=usage["actions"],
+            states=usage["states"],
+            model_calls=usage["model_calls"],
+            output_tokens=usage["output_tokens"],
+        )
+        session: SessionT | None = None
+        locked = False
+        try:
+            self.repository.acquire_project_lock(self.project_id, run_id)
+            locked = True
+            self.repository.requeue_interrupted_frontier(
+                run_id, {str(reason) for reason in RESUMABLE_STOPS}
+            )
+            self.repository.set_run_status(run_id, RunStatus.RUNNING)
+            session = await self.browser.start(
+                run_id=f"{run_id}-resume-{new_id()}",
+                headed=headed,
+            )
+            first = await self._execute(
+                run_id,
+                session,
+                NavigateAction(
+                    description="Resume from configured discovery start page",
+                    url=str(self.config.base_url),
+                ),
+                None,
+                None,
+                budget,
+            )
+            current = self.repository.get_run(run_id)
+            if isinstance(first, tuple) and current is not None and current.status == RunStatus.RUNNING:
+                observation, state = first
+                await self._run_unguided(run_id, session, observation, state, budget)
+
+            current = self.repository.get_run(run_id)
+            if current is not None and current.status == RunStatus.RUNNING:
+                self.repository.set_run_status(
+                    run_id,
+                    RunStatus.AWAITING_REVIEW,
+                    DiscoveryStop.FRONTIER_EXHAUSTED,
+                )
+            return run_id
+        except BaseException as exc:
+            current = self.repository.get_run(run_id)
+            if current is not None and current.status not in {
+                RunStatus.PAUSED,
+                RunStatus.CANCELLED,
+                RunStatus.FAILED,
+                RunStatus.AWAITING_REVIEW,
+            }:
+                self.repository.set_run_status(run_id, RunStatus.FAILED, str(exc))
+            raise
+        finally:
+            try:
+                if session is not None:
+                    await self.browser.close(session)
+            finally:
+                if locked:
+                    self.repository.release_project_lock(self.project_id, run_id)
+
     async def _run_supplied(
         self,
         run_id: str,
@@ -215,7 +315,6 @@ class ExplorationRunner[SessionT]:
 
             draft = await self.browser.observe(session)
             if self._authentication_required(draft):
-                self.repository.skip_pending_frontier(run_id, DiscoveryStop.AUTHENTICATION_REQUIRED)
                 self.repository.set_run_status(run_id, RunStatus.PAUSED, DiscoveryStop.AUTHENTICATION_REQUIRED)
                 return
             if not self.repository.frontier_exists_for_state(run_id, state.id):

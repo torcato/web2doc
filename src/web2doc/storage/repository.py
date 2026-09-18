@@ -178,6 +178,43 @@ class Repository:
             row.stop_reason = reason
             row.updated_at = utc_now()
 
+    def discovery_usage(self, run_id: str) -> dict[str, int]:
+        counted_attempt_statuses = {
+            AttemptStatus.ALLOWED,
+            AttemptStatus.EXECUTING,
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.UNCERTAIN,
+            AttemptStatus.RECONCILED,
+        }
+        with self.sessions() as session:
+            actions = session.scalar(
+                select(func.count(ActionAttemptRow.id)).where(
+                    ActionAttemptRow.run_id == run_id,
+                    ActionAttemptRow.status.in_(counted_attempt_statuses),
+                )
+            )
+            states = session.scalar(
+                select(func.count(func.distinct(ObservationRow.state_id))).where(
+                    ObservationRow.run_id == run_id,
+                    ObservationRow.state_id.is_not(None),
+                )
+            )
+            model_calls = session.scalar(
+                select(func.count(UsageEventRow.id)).where(UsageEventRow.run_id == run_id)
+            )
+            output_tokens = session.scalar(
+                select(func.coalesce(func.sum(UsageEventRow.output_tokens), 0)).where(
+                    UsageEventRow.run_id == run_id
+                )
+            )
+        return {
+            "actions": int(actions or 0),
+            "states": int(states or 0),
+            "model_calls": int(model_calls or 0),
+            "output_tokens": int(output_tokens or 0),
+        }
+
     def request_cancel(self, run_id: str) -> None:
         self.set_run_status(run_id, RunStatus.CANCELLED, "cancel requested")
 
@@ -459,6 +496,31 @@ class Repository:
                     FrontierItemRow.status == FrontierStatus.PENDING,
                 )
                 .values(status=FrontierStatus.SKIPPED, reason=reason, updated_at=utc_now())
+            )
+            return int(result.rowcount)  # type: ignore[attr-defined]
+
+    def requeue_interrupted_frontier(self, run_id: str, reasons: set[str]) -> int:
+        with self.sessions.begin() as session:
+            result = session.execute(
+                update(FrontierItemRow)
+                .where(
+                    FrontierItemRow.run_id == run_id,
+                    (
+                        (FrontierItemRow.status == FrontierStatus.EXPLORING)
+                        | (
+                            FrontierItemRow.status.in_(
+                                {FrontierStatus.SKIPPED, FrontierStatus.BLOCKED}
+                            )
+                            & FrontierItemRow.reason.in_(reasons)
+                        )
+                    ),
+                )
+                .values(
+                    status=FrontierStatus.PENDING,
+                    reason=None,
+                    attempt_id=None,
+                    updated_at=utc_now(),
+                )
             )
             return int(result.rowcount)  # type: ignore[attr-defined]
 

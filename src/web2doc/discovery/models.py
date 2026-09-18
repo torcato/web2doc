@@ -67,7 +67,7 @@ class RankedCandidate(BaseModel):
 class PlannerOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    proposals: list[RankedCandidate] = Field(default_factory=list, max_length=50)
+    proposals: list[RankedCandidate] = Field(default_factory=list, max_length=200)
     page_summary: str = Field(default="", max_length=2_000)
 
 

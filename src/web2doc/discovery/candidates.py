@@ -18,7 +18,18 @@ from web2doc.domain.models import (
 )
 
 WRITE_WORDS = re.compile(r"(?i)\b(create|delete|remove|save|submit|send|publish|invite|buy|pay|confirm)\b")
-NON_DOCUMENTATION_CONTROLS = {"cancel", "close", "reset"}
+NON_DOCUMENTATION_CONTROLS = {
+    "cancel",
+    "close",
+    "déconnexion",
+    "log out",
+    "logout",
+    "reset",
+    "se déconnecter",
+    "sign out",
+    "version mobile",
+}
+NON_DOCUMENTATION_URL_MARKERS = ("lodur_version=mobile",)
 
 
 def _slug(value: str) -> str:
@@ -52,6 +63,7 @@ def enumerate_candidates(observation: ObservationDraft) -> list[CandidateAction]
             or not control.name.strip()
             or control.input_type == "password"
             or control.name.strip().casefold() in NON_DOCUMENTATION_CONTROLS
+            or (control.href is not None and any(marker in control.href for marker in NON_DOCUMENTATION_URL_MARKERS))
         ):
             continue
         action: NavigateAction | ClickAction | FillAction | SelectAction | None = None

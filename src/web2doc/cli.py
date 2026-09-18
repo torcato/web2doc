@@ -146,6 +146,9 @@ def discover(
     max_actions: Annotated[int | None, typer.Option("--max-actions", min=1)] = None,
     max_states: Annotated[int | None, typer.Option("--max-states", min=1)] = None,
     max_seconds: Annotated[int | None, typer.Option("--max-seconds", min=1)] = None,
+    max_candidates_per_state: Annotated[
+        int | None, typer.Option("--max-candidates-per-state", min=1, max=200)
+    ] = None,
     headed: Annotated[bool, typer.Option("--headed")] = False,
     strict: Annotated[
         bool | None,
@@ -171,6 +174,7 @@ def discover(
                 "max_actions": max_actions,
                 "max_states": max_states,
                 "max_duration_seconds": max_seconds,
+                "max_candidates_per_state": max_candidates_per_state,
             }.items()
             if value is not None
         }
@@ -205,6 +209,72 @@ def discover(
             )
         )
         typer.echo(json.dumps(repository.discovery_report(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("discover-resume")
+def discover_resume(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[
+        str,
+        typer.Argument(help="Budget-exhausted or authentication-paused discovery run identifier"),
+    ],
+    role: Annotated[str, typer.Option("--role")] = "default",
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Pydantic AI model name; omit for deterministic heuristic ranking"),
+    ] = None,
+    additional_actions: Annotated[int | None, typer.Option("--additional-actions", min=1)] = None,
+    additional_states: Annotated[int | None, typer.Option("--additional-states", min=1)] = None,
+    additional_seconds: Annotated[int | None, typer.Option("--additional-seconds", min=1)] = None,
+    max_candidates_per_state: Annotated[
+        int | None, typer.Option("--max-candidates-per-state", min=1, max=200)
+    ] = None,
+    headed: Annotated[bool, typer.Option("--headed")] = False,
+) -> None:
+    """Continue an unguided discovery run stopped by a budget or authentication pause."""
+
+    config, repository, project_id, roles = _open_project(project_dir)
+    try:
+        settings = load_runtime_settings(project_dir)
+        selected_model = settings.model_for_discovery(model)
+        planner = PydanticAIPlanner(selected_model) if selected_model else HeuristicPlanner()
+        overrides = {
+            key: value
+            for key, value in {
+                "max_actions": additional_actions,
+                "max_states": additional_states,
+                "max_duration_seconds": additional_seconds,
+                "max_candidates_per_state": max_candidates_per_state,
+            }.items()
+            if value is not None
+        }
+        additional_limits = config.discovery.limits.model_copy(update=overrides)
+        runner = ExplorationRunner(
+            repository=repository,
+            artifacts=ArtifactStore(project_dir / RUNTIME_DIR),
+            browser=PlaywrightBrowser(
+                project_root=project_dir,
+                config=config,
+                role=config.role(role),
+                settings=settings,
+            ),
+            policy=ActionPolicy(config),
+            planner=planner,
+            config=config,
+            project_id=project_id,
+            role_id=roles[role],
+            role_name=role,
+        )
+        resumed_run_id = asyncio.run(
+            runner.resume(
+                run_id,
+                headed=headed,
+                additional_limits=additional_limits,
+            )
+        )
+        typer.echo(json.dumps(repository.discovery_report(resumed_run_id), indent=2))
     finally:
         repository.close()
 
@@ -474,9 +544,19 @@ def docs_generate(
         str, typer.Option("--notes", help="Review note recorded for automatic approval")
     ] = "Automatically generated and reviewed",
     model: Annotated[str | None, typer.Option("--model", help="Pydantic AI discovery model")] = None,
+    resume_run: Annotated[
+        str | None,
+        typer.Option(
+            "--resume-run",
+            help="Continue a budget-exhausted discovery run before generating documentation",
+        ),
+    ] = None,
     max_actions: Annotated[int | None, typer.Option("--max-actions", min=1)] = None,
     max_states: Annotated[int | None, typer.Option("--max-states", min=1)] = None,
     max_seconds: Annotated[int | None, typer.Option("--max-seconds", min=1)] = None,
+    max_candidates_per_state: Annotated[
+        int | None, typer.Option("--max-candidates-per-state", min=1, max=200)
+    ] = None,
     trusted_fixture_api: Annotated[
         bool,
         typer.Option("--trusted-fixture-api", help="Use same-origin fixture endpoints during verification"),
@@ -496,6 +576,7 @@ def docs_generate(
                 "max_actions": max_actions,
                 "max_states": max_states,
                 "max_duration_seconds": max_seconds,
+                "max_candidates_per_state": max_candidates_per_state,
             }.items()
             if value is not None
         }
@@ -517,7 +598,9 @@ def docs_generate(
             role_name=role,
         )
         discovery_run_id = asyncio.run(
-            runner.run(mode=DiscoveryMode.UNGUIDED, headed=headed, limits=limits)
+            runner.resume(resume_run, headed=headed, additional_limits=limits)
+            if resume_run is not None
+            else runner.run(mode=DiscoveryMode.UNGUIDED, headed=headed, limits=limits)
         )
         discovery_report = repository.discovery_report(discovery_run_id)
         run_info = discovery_report["run"]
