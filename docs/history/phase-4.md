@@ -5,6 +5,8 @@ Status: core implementation complete; human usability and real-target review gat
 
 ## Outcome
 
+Architecture evolution: this is a historical implementation record. The [migration plan](../development-plan.md) proposes independently retryable composition and separate evidence rules for feature references and procedures. Current verification and approval behavior remains as implemented until those changes ship.
+
 Phase 4 produces illustrated Markdown guides from current, passed workflow verifications. Each procedural claim is structured, has declared provenance, and is linked to an applicable captured observation and screenshot. Generated drafts cannot be exported until a reviewer approves the exact document revision.
 
 The implementation provides:

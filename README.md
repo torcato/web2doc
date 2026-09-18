@@ -2,6 +2,8 @@
 
 `web2doc` maps website states, constructs versioned workflows, and verifies browser procedures with evidence as the foundation for generating user documentation. It supports deterministic supplied workflows and bounded feature discovery using either local heuristic ranking or a structured Pydantic AI planner.
 
+See the [project documentation](docs/README.md) for the current architecture, development plan, implementation status, and historical records.
+
 ## Development setup
 
 ```bash
@@ -116,6 +118,20 @@ uv run web2doc recover demo
 uv run web2doc cancel demo RUN_ID
 uv run web2doc discovery-report demo RUN_ID
 ```
+
+Freeze a run's current evidence and distill reusable feature drafts after the browser session has closed:
+
+```bash
+uv run web2doc capture-freeze demo RUN_ID
+uv run web2doc distill demo --run RUN_ID
+```
+
+The manifest is immutable and contains versioned references to captured observations, screenshots, actions,
+transitions, frontier coverage, and candidate features. Freezing unchanged evidence returns the same manifest.
+`distill` does not open a browser or log in to the target application. It reuses a successful result when its manifest
+and processor configuration are unchanged, while a failed processing attempt can be retried with the same command.
+This first offline-processing slice creates evidence-linked feature drafts; feature-reference publishing remains a
+planned migration step described in `docs/development-plan.md`.
 
 Draft workflow revisions from explored transitions, or import a reviewed workflow definition:
 

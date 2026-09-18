@@ -18,6 +18,7 @@ from web2doc.config import (
 )
 from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
 from web2doc.discovery.runner import ExplorationRunner
+from web2doc.distillation.service import DistillationService
 from web2doc.documentation.composer import DeterministicComposer, PydanticAIDocumentComposer
 from web2doc.documentation.models import OwnerSourceDraft, OwnerSourceKind, ReviewDecision
 from web2doc.documentation.publish import DocumentationPublisher
@@ -287,6 +288,40 @@ def discovery_report(
     _config, repository, _project_id, _roles = _open_project(project_dir)
     try:
         typer.echo(json.dumps(repository.discovery_report(run_id), indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("capture-freeze")
+def capture_freeze(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Argument(help="Capture or discovery run identifier")],
+) -> None:
+    """Freeze the current evidence from a run into an immutable manifest."""
+
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        manifest = DistillationService(
+            repository, ArtifactStore(project_dir / RUNTIME_DIR)
+        ).freeze(run_id)
+        typer.echo(manifest.model_dump_json(indent=2))
+    finally:
+        repository.close()
+
+
+@app.command("distill")
+def distill(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Option("--run", help="Capture or discovery run identifier")],
+) -> None:
+    """Build reusable feature drafts from saved evidence without opening a browser."""
+
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        service = DistillationService(repository, ArtifactStore(project_dir / RUNTIME_DIR))
+        manifest = service.freeze(run_id)
+        result = asyncio.run(service.distill(manifest.id))
+        typer.echo(result.model_dump_json(indent=2))
     finally:
         repository.close()
 

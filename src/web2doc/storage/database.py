@@ -353,6 +353,57 @@ class ExportRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class CaptureManifestRow(Base):
+    __tablename__ = "capture_manifests"
+    __table_args__ = (
+        UniqueConstraint("run_id", "version", name="uq_capture_manifest_version"),
+        UniqueConstraint("run_id", "content_hash", name="uq_capture_manifest_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ProcessingAttemptRow(Base):
+    __tablename__ = "processing_attempts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    manifest_id: Mapped[str] = mapped_column(
+        ForeignKey("capture_manifests.id", ondelete="CASCADE"), nullable=False
+    )
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    processor_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    output_json: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DistilledFeatureRow(Base):
+    __tablename__ = "distilled_features"
+    __table_args__ = (
+        UniqueConstraint("processing_attempt_id", "feature_key", name="uq_distilled_feature_attempt_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    processing_attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("processing_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    feature_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, nullable=False)
+    unresolved_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def make_engine(database_path: Path) -> Engine:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{database_path}")

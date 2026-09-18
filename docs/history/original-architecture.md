@@ -1,10 +1,15 @@
 # Architecture and development plan
 
 Date: September 14, 2026  
-Status: proposed implementation plan; application code has not yet been implemented  
-Companion: [Website documentation case study](website-documentation-case-study.md)
+Status: historical baseline; superseded by the September 18, 2026 architecture linked below
 
-Execution roadmap: [Phased development plan](development-plan.md), with task checklists, deliverables, and completion criteria.
+Companion: [Website documentation case study](feasibility-case-study.md)
+
+Current architecture: [Capture and offline distillation](../architecture.md).
+
+Current execution roadmap: [Architecture migration development plan](../development-plan.md).
+
+This document preserves the original architecture, library rationale, and baseline acceptance targets. Its statements about unimplemented code, delivery estimates, mandatory verification for all documentation, and the live planning loop describe the original proposal, not the current implementation or new design. Phase 1–4 implementation records describe delivered work. The linked architecture and migration plan take precedence for new development; the [original phased plan](original-development-plan.md) remains a historical checklist.
 
 ## 1. Recommended direction
 
@@ -90,7 +95,7 @@ Use standard-library `asyncio`, `tomllib`, `hashlib`, `logging`, and `pathlib` w
 
 The review server runs with pinned Uvicorn. Browser jobs run in the worker process, not request handlers or FastAPI `BackgroundTasks`; the latter is not the application's durable job mechanism. [FastAPI background task guidance](https://fastapi.tiangolo.com/tutorial/background-tasks/).
 
-See the [library adoption plan](development-plan.md#python-library-adoption-plan) for package names, dependency groups, optional extras, and phase-specific validation.
+See the [library adoption plan](original-development-plan.md#python-library-adoption-plan) for package names, dependency groups, optional extras, and phase-specific validation.
 
 ### Development and testing dependencies
 
@@ -118,7 +123,7 @@ Use Playwright's async API directly in browser fixtures so tests exercise the ap
 | PostgreSQL / external queue / object storage | Introduce when multiple worker hosts or hosted access are required. SQLite is not the distributed job queue. |
 | Graph/vector database | Defer. Relational state/edge tables and bounded graph traversal are sufficient initially. |
 
-See the [case-study comparison](website-documentation-case-study.md#tool-comparison) for sources and tradeoffs. [Stagehand v4 documentation](https://docs.stagehand.dev/v4/first-steps/introduction) describes its current browser architecture.
+See the [case-study comparison](feasibility-case-study.md#tool-comparison) for sources and tradeoffs. [Stagehand v4 documentation](https://docs.stagehand.dev/v4/first-steps/introduction) describes its current browser architecture.
 
 ## 5. Domain model and storage
 

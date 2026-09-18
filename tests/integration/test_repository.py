@@ -43,6 +43,9 @@ def test_migration_creates_expected_schema(tmp_path: Path) -> None:
         "document_evidence",
         "review_decisions",
         "exports",
+        "capture_manifests",
+        "processing_attempts",
+        "distilled_features",
     } <= tables
 
 
@@ -53,7 +56,9 @@ def test_migration_can_upgrade_the_same_database_twice(tmp_path: Path) -> None:
     upgrade_database(database)
 
     with sqlite3.connect(database) as connection:
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == ("0004_phase4",)
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0005_offline_distillation",
+        )
 
 
 def test_phase_one_database_upgrades_without_losing_runs(tmp_path: Path, project_config) -> None:

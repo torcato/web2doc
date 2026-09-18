@@ -3,7 +3,9 @@
 Date: September 14, 2026  
 Status: architectural assessment and proposed proof of concept
 
-Implementation follow-up: [Architecture and development plan](architecture-and-development-plan.md), including library decisions, development phases, and testing criteria.
+September 18, 2026 update: the current direction is [autonomous capture with offline distillation](../architecture.md), with a separate [development plan](../development-plan.md). This case study retains the original research and estimates. Its model-driven exploration loop is no longer the default target architecture: deterministic exploration collects evidence, bounded AI assistance handles ambiguous screens, and independent processing turns saved evidence into user documentation. Human recordings and supplied workflows are optional inputs. Observed feature descriptions and demonstrated procedures have distinct evidence requirements.
+
+Implementation follow-up: [Architecture and development plan](original-architecture.md), including library decisions, development phases, and testing criteria.
 
 ## Executive summary
 

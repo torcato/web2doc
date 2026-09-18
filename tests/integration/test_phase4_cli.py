@@ -50,5 +50,7 @@ def test_phase_four_commands_initialize_sources_and_coverage(tmp_path: Path) -> 
         "document-bundle",
         "documentation-coverage",
         "docs-export",
+        "capture-freeze",
+        "distill",
     ):
         assert command in help_result.output

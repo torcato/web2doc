@@ -148,7 +148,7 @@ class PlaywrightBrowser:
         await self._inject_synthetic_labels(session.page)
         with suppress(PlaywrightTimeoutError):
             await session.page.wait_for_load_state("networkidle", timeout=3_000)
-        
+
         body = session.page.locator("body")
         try:
             aria = await body.aria_snapshot(mode="ai", timeout=10_000)
@@ -217,7 +217,7 @@ class PlaywrightBrowser:
                   const name = labelledBy || element.getAttribute("aria-label") || label ||
                     textName || valueName || descendantName || element.getAttribute("title") ||
                     element.getAttribute("placeholder") || element.getAttribute("name") ||
-                    element.getAttribute("id") || "";
+                    "";
                   return {
                     role,
                     name: name.slice(0, 300),

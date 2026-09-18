@@ -5,6 +5,8 @@ Status: core implementation complete; live-model quality gate pending
 
 ## Outcome
 
+Architecture evolution: this is a historical implementation record. The [new architecture](../architecture.md) retains autonomous discovery but makes deterministic scheduling the default and bounded model assistance optional. See the [migration plan](../development-plan.md) for proposed changes; they are not implemented by this record.
+
 Phase 2 adds bounded website-state discovery without weakening the Phase 1 execution boundary. Application code extracts visible controls and constructs a closed set of typed candidate actions. A planner may rank those candidate IDs and describe candidate features, but it cannot invent URLs, selectors, tools, JavaScript, or shell code.
 
 Two discovery modes use the same evidence and graph storage:

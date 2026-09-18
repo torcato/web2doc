@@ -12,6 +12,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from web2doc.discovery.models import CandidateAction, FrontierStatus, PlannerUsage, StateIdentity
+from web2doc.distillation.models import (
+    CaptureManifest,
+    CaptureManifestContent,
+    DistillationResult,
+    DistilledFeature,
+)
 from web2doc.documentation.models import (
     DocumentContent,
     DocumentRevision,
@@ -35,6 +41,8 @@ from web2doc.domain.models import (
 from web2doc.storage.database import (
     ActionAttemptRow,
     ArtifactRow,
+    CaptureManifestRow,
+    DistilledFeatureRow,
     DocumentEvidenceRow,
     DocumentRevisionRow,
     ExportRow,
@@ -44,6 +52,7 @@ from web2doc.storage.database import (
     ObservationRow,
     OwnerSourceRow,
     PredicateResultRow,
+    ProcessingAttemptRow,
     ProjectLockRow,
     ProjectRow,
     ReviewDecisionRow,
@@ -214,6 +223,318 @@ class Repository:
             "model_calls": int(model_calls or 0),
             "output_tokens": int(output_tokens or 0),
         }
+
+    def capture_manifest_content(self, run_id: str) -> CaptureManifestContent:
+        with self.sessions() as session:
+            run = session.get(RunRow, run_id)
+            if run is None:
+                raise KeyError(f"run not found: {run_id}")
+            observations = tuple(
+                session.scalars(
+                    select(ObservationRow)
+                    .where(ObservationRow.run_id == run_id)
+                    .order_by(ObservationRow.observed_at, ObservationRow.id)
+                )
+            )
+            actions = tuple(
+                session.scalars(
+                    select(ActionAttemptRow)
+                    .where(ActionAttemptRow.run_id == run_id)
+                    .order_by(ActionAttemptRow.sequence)
+                )
+            )
+            transitions = tuple(
+                session.scalars(
+                    select(TransitionRow)
+                    .where(TransitionRow.run_id == run_id)
+                    .order_by(TransitionRow.created_at, TransitionRow.id)
+                )
+            )
+            features = tuple(
+                session.scalars(
+                    select(FeatureRow)
+                    .where(FeatureRow.run_id == run_id)
+                    .order_by(FeatureRow.title, FeatureRow.id)
+                )
+            )
+            frontier_rows = tuple(
+                session.scalars(select(FrontierItemRow).where(FrontierItemRow.run_id == run_id))
+            )
+            frontier: dict[str, int] = {}
+            for item in frontier_rows:
+                frontier[item.status] = frontier.get(item.status, 0) + 1
+
+            artifact_ids = {
+                artifact_id
+                for observation in observations
+                for artifact_id in (observation.aria_artifact_id, observation.screenshot_artifact_id)
+            }
+            artifacts = {
+                row.id: row
+                for row in session.scalars(select(ArtifactRow).where(ArtifactRow.id.in_(artifact_ids)))
+            }
+            missing = artifact_ids - artifacts.keys()
+            if missing:
+                raise ValueError(f"capture contains missing artifact records: {sorted(missing)}")
+
+            if run.discovery_mode == DiscoveryMode.UNGUIDED:
+                origin = "autonomous"
+            elif run.discovery_mode == DiscoveryMode.SUPPLIED:
+                origin = "supplied"
+            else:
+                origin = "procedure"
+            complete_stops = {"frontier_exhausted", "supplied_workflow_complete"}
+            if origin == "procedure":
+                partial = run.status not in {RunStatus.AWAITING_REVIEW, RunStatus.COMPLETED}
+            else:
+                partial = run.stop_reason not in complete_stops
+
+            def artifact_payload(artifact_id: str) -> dict[str, object]:
+                artifact = artifacts[artifact_id]
+                return {
+                    "id": artifact.id,
+                    "relative_path": artifact.relative_path,
+                    "sha256": artifact.sha256,
+                    "media_type": artifact.media_type,
+                    "sensitivity": artifact.sensitivity,
+                    "size_bytes": artifact.size_bytes,
+                }
+
+            return CaptureManifestContent.model_validate(
+                {
+                    "run_id": run.id,
+                    "project_id": run.project_id,
+                    "role_id": run.role_id,
+                    "scenario": run.scenario,
+                    "origin": origin,
+                    "capture_status": run.status,
+                    "stop_reason": run.stop_reason,
+                    "partial": partial,
+                    "limits": json.loads(run.limits_json) if run.limits_json else None,
+                    "frontier": frontier,
+                    "observations": [
+                        {
+                            "id": observation.id,
+                            "state_id": observation.state_id,
+                            "url": observation.url,
+                            "title": observation.title,
+                            "aria": artifact_payload(observation.aria_artifact_id),
+                            "screenshot": artifact_payload(observation.screenshot_artifact_id),
+                            "observed_at": observation.observed_at,
+                        }
+                        for observation in observations
+                    ],
+                    "actions": [
+                        {
+                            "id": action.id,
+                            "sequence": action.sequence,
+                            "kind": action.action_kind,
+                            "effect": action.effect,
+                            "status": action.status,
+                            "payload": json.loads(action.payload_json),
+                            "before_observation_id": action.before_observation_id,
+                            "after_observation_id": action.after_observation_id,
+                            "error": action.error,
+                        }
+                        for action in actions
+                    ],
+                    "transitions": [
+                        {
+                            "id": transition.id,
+                            "source_state_id": transition.source_state_id,
+                            "target_state_id": transition.target_state_id,
+                            "attempt_id": transition.attempt_id,
+                        }
+                        for transition in transitions
+                    ],
+                    "candidate_features": [
+                        {
+                            "id": feature.id,
+                            "title": feature.title,
+                            "description": feature.description,
+                            "confidence": feature.confidence,
+                            "state_id": feature.state_id,
+                            "observation_id": feature.observation_id,
+                            "unresolved": json.loads(feature.unresolved_json),
+                        }
+                        for feature in features
+                    ],
+                }
+            )
+
+    def add_capture_manifest(self, content: CaptureManifestContent) -> CaptureManifest:
+        canonical = json.dumps(content.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        content_hash = sha256(canonical.encode("utf-8")).hexdigest()
+        with self.sessions.begin() as session:
+            existing = session.scalar(
+                select(CaptureManifestRow).where(
+                    CaptureManifestRow.run_id == content.run_id,
+                    CaptureManifestRow.content_hash == content_hash,
+                )
+            )
+            if existing is None:
+                maximum = session.scalar(
+                    select(func.max(CaptureManifestRow.version)).where(
+                        CaptureManifestRow.run_id == content.run_id
+                    )
+                )
+                existing = CaptureManifestRow(
+                    id=new_id(),
+                    run_id=content.run_id,
+                    version=int(maximum or 0) + 1,
+                    schema_version=content.schema_version,
+                    content_hash=content_hash,
+                    content_json=canonical,
+                    created_at=utc_now(),
+                )
+                session.add(existing)
+                session.flush()
+            return self._capture_manifest(existing)
+
+    def get_capture_manifest(self, manifest_id: str) -> CaptureManifest:
+        with self.sessions() as session:
+            row = session.get(CaptureManifestRow, manifest_id)
+            if row is None:
+                raise KeyError(f"capture manifest not found: {manifest_id}")
+            return self._capture_manifest(row)
+
+    def latest_capture_manifest(self, run_id: str) -> CaptureManifest | None:
+        with self.sessions() as session:
+            row = session.scalar(
+                select(CaptureManifestRow)
+                .where(CaptureManifestRow.run_id == run_id)
+                .order_by(CaptureManifestRow.version.desc())
+                .limit(1)
+            )
+            return self._capture_manifest(row) if row is not None else None
+
+    @staticmethod
+    def _capture_manifest(row: CaptureManifestRow) -> CaptureManifest:
+        return CaptureManifest(
+            id=row.id,
+            version=row.version,
+            content_hash=row.content_hash,
+            created_at=row.created_at,
+            content=CaptureManifestContent.model_validate_json(row.content_json),
+        )
+
+    def completed_distillation(
+        self, manifest_id: str, processor_name: str, configuration_hash: str
+    ) -> DistillationResult | None:
+        with self.sessions() as session:
+            attempt = session.scalar(
+                select(ProcessingAttemptRow)
+                .where(
+                    ProcessingAttemptRow.manifest_id == manifest_id,
+                    ProcessingAttemptRow.stage == "distillation",
+                    ProcessingAttemptRow.processor_name == processor_name,
+                    ProcessingAttemptRow.configuration_hash == configuration_hash,
+                    ProcessingAttemptRow.status == "completed",
+                )
+                .order_by(ProcessingAttemptRow.completed_at.desc())
+                .limit(1)
+            )
+            if attempt is None:
+                return None
+            features = tuple(
+                session.scalars(
+                    select(DistilledFeatureRow)
+                    .where(DistilledFeatureRow.processing_attempt_id == attempt.id)
+                    .order_by(DistilledFeatureRow.title, DistilledFeatureRow.id)
+                )
+            )
+            return self._distillation_result(attempt, features, reused=True)
+
+    def start_distillation(
+        self, manifest_id: str, processor_name: str, configuration_hash: str
+    ) -> ProcessingAttemptRow:
+        row = ProcessingAttemptRow(
+            id=new_id(),
+            manifest_id=manifest_id,
+            stage="distillation",
+            processor_name=processor_name,
+            configuration_hash=configuration_hash,
+            status="running",
+            started_at=utc_now(),
+        )
+        with self.sessions.begin() as session:
+            if session.get(CaptureManifestRow, manifest_id) is None:
+                raise KeyError(f"capture manifest not found: {manifest_id}")
+            session.add(row)
+        return row
+
+    def complete_distillation(
+        self, attempt_id: str, features: list[DistilledFeature]
+    ) -> DistillationResult:
+        with self.sessions.begin() as session:
+            attempt = session.get(ProcessingAttemptRow, attempt_id)
+            if attempt is None:
+                raise KeyError(f"processing attempt not found: {attempt_id}")
+            if attempt.status != "running":
+                raise ValueError(f"processing attempt is not running: {attempt_id}")
+            for feature in features:
+                session.add(
+                    DistilledFeatureRow(
+                        id=feature.id,
+                        processing_attempt_id=attempt.id,
+                        feature_key=feature.feature_key,
+                        title=feature.title,
+                        description=feature.description,
+                        evidence_json=json.dumps(
+                            [evidence.model_dump(mode="json") for evidence in feature.evidence],
+                            sort_keys=True,
+                        ),
+                        unresolved_json=json.dumps(feature.unresolved),
+                        created_at=utc_now(),
+                    )
+                )
+            attempt.status = "completed"
+            attempt.error = None
+            attempt.output_json = json.dumps(
+                {"feature_count": len(features)}, sort_keys=True, separators=(",", ":")
+            )
+            attempt.completed_at = utc_now()
+            session.flush()
+            return self._distillation_result(attempt, tuple(session.scalars(
+                select(DistilledFeatureRow)
+                .where(DistilledFeatureRow.processing_attempt_id == attempt.id)
+                .order_by(DistilledFeatureRow.title, DistilledFeatureRow.id)
+            )))
+
+    def fail_processing_attempt(self, attempt_id: str, error: str) -> None:
+        with self.sessions.begin() as session:
+            attempt = session.get(ProcessingAttemptRow, attempt_id)
+            if attempt is None:
+                raise KeyError(f"processing attempt not found: {attempt_id}")
+            attempt.status = "failed"
+            attempt.error = error
+            attempt.completed_at = utc_now()
+
+    @staticmethod
+    def _distillation_result(
+        attempt: ProcessingAttemptRow,
+        rows: Sequence[DistilledFeatureRow],
+        *,
+        reused: bool = False,
+    ) -> DistillationResult:
+        return DistillationResult(
+            processing_attempt_id=attempt.id,
+            manifest_id=attempt.manifest_id,
+            processor_name=attempt.processor_name,
+            configuration_hash=attempt.configuration_hash,
+            reused=reused,
+            features=[
+                DistilledFeature(
+                    id=row.id,
+                    feature_key=row.feature_key,
+                    title=row.title,
+                    description=row.description,
+                    evidence=json.loads(row.evidence_json),
+                    unresolved=json.loads(row.unresolved_json),
+                )
+                for row in rows
+            ],
+        )
 
     def request_cancel(self, run_id: str) -> None:
         self.set_run_status(run_id, RunStatus.CANCELLED, "cancel requested")

@@ -5,6 +5,8 @@ Status: core implementation complete; live discovery-to-verification quality gat
 
 ## Outcome
 
+Architecture evolution: this is a historical implementation record. The [new architecture](../architecture.md) retains replay verification for procedural outcomes while adding documentation of observed features without mandatory replay. Parameterized inputs will not imply that an application can be reset.
+
 Phase 3 turns discoveries into immutable, replayable workflow revisions and judges their outcomes using explicit predicates. A completed browser action is not proof of success. Each verification is recorded as `passed`, `failed`, or `inconclusive` against an exact workflow revision, fixture receipt, predicate result set, and captured browser evidence.
 
 The implementation adds:

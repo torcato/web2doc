@@ -5,6 +5,8 @@ Status: implemented and verified against the local fixture application
 
 ## Outcome
 
+Architecture evolution: this is a historical implementation record. The [capture and distillation migration](../development-plan.md) reuses this browser, policy, journal, and artifact foundation.
+
 Phase 1 provides a deterministic, LLM-free execution foundation. An operator can initialize a project, capture a role-specific browser session, execute an explicit JSON procedure, inspect its status, request cancellation, and recover interrupted work. Every browser action travels through the same policy, journal, and evidence path that a later LLM planner will use.
 
 The implementation is deliberately a workflow recorder, not yet a website explorer or documentation generator. Automated feature discovery begins in phase 2.
