@@ -2,7 +2,7 @@
 
 Date: September 18, 2026
 
-Status: first vertical slice implemented; feature-reference publishing and planner fallback remain pending
+Status: immutable capture/distillation, resilient discovery scheduling, and observed feature-reference publishing implemented
 
 ## Delivered behavior
 
@@ -13,6 +13,14 @@ The first migration slice separates persisted browser capture from feature proce
 `distill PROJECT --run RUN_ID` freezes the current evidence and runs deterministic feature distillation without opening a browser or loading target authentication. The result contains feature drafts with observation and screenshot provenance. Existing candidate features are preferred; successful captured operations provide a conservative fallback and are marked as not independently verified.
 
 Processing attempts store the manifest, processor identity, configuration hash, status, error, and completion time. Feature outputs are stored per attempt. A successful result with identical inputs is reused. A failed attempt can be retried while the underlying capture and its action count remain unchanged.
+
+Discovery now fingerprints semantic UI structure instead of Playwright session references. Transient ARIA markers such as `ref`, `cursor`, and `active` are removed while meaningful state such as `checked`, selected tabs, and dialogs remains part of state identity. This prevents a visually unchanged page from consuming the state budget as hundreds of false states.
+
+Frontier scheduling applies deterministic coverage tiers above optional model ranking. Settings and configuration entry points are handled before state-reset actions such as New chat. Per-state visit and per-action repeat limits prevent one branch from monopolizing the action budget. If the configured planner exhausts its call/token allowance or repeatedly returns an invalid result, the run records the failure and continues with the deterministic planner.
+
+Because state identity changed from `state-v1` to `state-v2`, old discovery runs remain readable and distillable but are not safe to resume. The resume command returns an explicit instruction to start a fresh run.
+
+Completed distillation results can now produce versioned feature-reference documents. Configuration controls are grouped into a settings page and choices observed after opening each control are rendered as options rather than standalone pages. References record observed or demonstrated evidence separately from verified workflow claims, support exact-revision review bundles, and export alongside verified guides. `docs-generate` runs capture freezing, distillation, reference generation, automatic review, workflow verification, and combined export in one operation.
 
 ## Storage migration
 
@@ -26,8 +34,8 @@ The migration is additive. Existing run, workflow, verification, document, revie
 
 ## Validation
 
-Automated coverage verifies idempotent manifest freezing, artifact-integrity checks through the artifact store, evidence-linked deterministic output, successful-result reuse, and retry after an offline processing failure without new browser actions. Migration, repository, CLI help, lint, and strict type checks pass. Browser extraction no longer presents arbitrary DOM IDs as user-facing names; known controls can still receive explicit synthetic labels.
+Automated coverage verifies idempotent manifest freezing, artifact-integrity checks through the artifact store, evidence-linked deterministic output, successful-result reuse, and retry after an offline processing failure without new browser actions. Discovery regressions cover volatile Chainlit-style references, settings-first scheduling, repeat suppression, planner failure, and model-budget fallback. Migration, repository, CLI help, lint, and strict type checks pass. Browser extraction no longer presents arbitrary DOM IDs as user-facing names; known controls can still receive explicit synthetic labels.
 
 ## Next slice
 
-Implement deterministic discovery scheduling with optional bounded model batches and fallback. A planner output failure should remain a diagnostic event, preserve the frontier, and allow other permitted branches to continue. Then add model-backed offline grouping on top of the manifest and processing-attempt contracts delivered here.
+Add optional model-backed offline grouping on top of the deterministic grouping contract and improve generic area classification beyond settings/interfaces. Model-assistance batching, legacy-run migration, persisted resume configuration, and parameterized replay remain separate follow-up work.

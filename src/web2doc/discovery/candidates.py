@@ -94,3 +94,22 @@ def enumerate_candidates(observation: ObservationDraft) -> list[CandidateAction]
             candidate = _candidate(action, control.name)
             candidates[candidate.signature] = candidate
     return list(candidates.values())
+
+
+def coverage_priority(candidate: CandidateAction) -> int:
+    """Return a deterministic coverage tier that model ranking cannot override."""
+
+    label = candidate.label.casefold().strip()
+    if any(marker in label for marker in ("settings", "configure", "configuration")):
+        return 6
+    if any(marker in label for marker in ("model", "profile", "mcp", "server")):
+        return 5
+    if candidate.action.kind == "select" or label in {"attach file", "upload file"}:
+        return 4
+    if candidate.action.kind == "click" and label not in {"new chat", "confirm"}:
+        return 3
+    if candidate.action.kind == "navigate":
+        return 2
+    if label in {"new chat", "confirm"}:
+        return 1
+    return 0

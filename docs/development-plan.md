@@ -2,7 +2,7 @@
 
 Date: September 18, 2026
 
-Status: implementation started; immutable manifests and deterministic offline feature distillation delivered
+Status: implementation started; manifests, resilient discovery, offline distillation, and observed feature-reference export delivered
 
 Design reference: [Autonomous capture and offline distillation](architecture.md)
 
@@ -43,11 +43,12 @@ Acceptance: a representative old run and a new partial run can be opened as mani
 
 ## Phase B — Make capture resilient to planner failure
 
-- [ ] Make deterministic frontier ranking the default while preserving explicitly configured model-assisted behavior through documented compatibility handling.
-- [ ] Prioritize navigation, expandable menus, tabs, and representative forms; bound pagination and repeated data variants.
+- [x] Apply deterministic coverage tiers above optional model ranking so important entry points cannot be starved.
+- [x] Prioritize settings/configuration, model/profile/MCP controls, selects/uploads, and general clicks ahead of state-reset actions; bound repeated state/action variants.
 - [ ] Build bounded semantic model views using ARIA and selected DOM fields. Keep complete sanitized evidence; report omissions and truncation.
-- [ ] Batch optional model assistance, cap response size and latency, and fall back to code on timeout, invalid schema, output exhaustion, or provider outage.
-- [ ] Separate assistance-failure diagnostics from terminal capture stop reasons. Unresolved branches remain visible and pending or explicitly blocked.
+- [ ] Batch optional model assistance and cap response size and latency. Per-call output limits already apply.
+- [x] Fall back to deterministic planning on invalid planner output, output retries, provider errors, or exhausted model-call/token budgets.
+- [x] Separate assistance-failure diagnostics from terminal capture stop reasons so the existing frontier can continue.
 - [ ] Extend resume to eligible legacy planner-failed runs after checking frontier integrity and interrupted actions.
 - [ ] Persist configuration changes on resume; clarify elapsed-time and additional-budget semantics.
 
@@ -70,13 +71,13 @@ Acceptance: close the browser and make the target unreachable, then distill a sa
 
 ## Phase D — Publish the documentation evidence supports
 
-- [ ] Add feature-reference and procedure document kinds with observed, demonstrated, and replay-verified evidence support distinct from editorial approval.
-- [ ] Define schemas and templates for purpose, navigation, visible controls/fields, prerequisites, steps, and supported outcomes.
-- [ ] Compose from persisted distillation and evidence; resolve illustrations only to retained artifacts.
+- [x] Add a feature-reference document kind with observed and demonstrated evidence support distinct from editorial approval; verified workflow guides remain separate.
+- [x] Define conservative feature-reference schemas and templates for visible controls, observed options, evidence levels, and limitations.
+- [x] Compose feature references from persisted distillation and resolve illustrations only to retained artifacts.
 - [ ] Validate claim support, role, evidence currency, and document revision independently of model prose.
-- [ ] Preserve existing verification gates for existing procedure exports. Add the observed feature-reference path with exact-revision approval.
-- [ ] Define and document explicit auto-approval eligibility for feature references; do not automatically approve demonstrated-only procedures in this migration.
-- [ ] Extend coverage reports to separate observed features, demonstrated procedures, replay verdicts, document availability, approval, and unexplored branches.
+- [x] Preserve existing verification gates for procedure exports and add the observed feature-reference path with exact-revision approval.
+- [x] Define automatic approval eligibility for generated feature references in `docs-generate`; demonstrated-only procedures are not treated as verified.
+- [x] Extend coverage reports with feature-reference evidence levels, approval, exportability, and unresolved limitations.
 - [ ] Retry composition per document and preserve previous reviews and manual edits as revisions.
 
 Likely areas: document models, `documentation/service.py`, `composer.py`, templates, `publish.py`, repository coverage, and review commands.
@@ -142,6 +143,6 @@ A schema migration must be backed up and reversible by restoring the project dat
 
 ## First implementation slice
 
-Implement phase A and the smallest useful portion of C: freeze an existing discovery run into a manifest, process one captured area into a persisted feature draft, and retry that processing with the browser closed. Then implement phase B's planner-failure fallback and recovery. This validates the new boundary early while addressing the failure that currently interrupts long explorations.
+Phase A and the smallest useful portion of C are implemented: an existing discovery run can be frozen into a manifest, processed into persisted feature drafts, and retried with the browser closed. Phase B now includes stable semantic fingerprints, deterministic coverage tiers, repetition bounds, and planner/model-budget fallback. The next slice is evidence-aware feature-reference composition and publishing, followed by the remaining model-view batching and resume work.
 
 Document new CLI examples only when their corresponding behavior is implemented. Keep all checkboxes here pending until validated; this documentation change does not claim the migration is complete.

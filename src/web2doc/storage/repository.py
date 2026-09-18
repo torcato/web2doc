@@ -21,6 +21,8 @@ from web2doc.distillation.models import (
 from web2doc.documentation.models import (
     DocumentContent,
     DocumentRevision,
+    FeatureReferenceContent,
+    FeatureReferenceRevision,
     OwnerSourceDraft,
     ReviewDecision,
 )
@@ -46,6 +48,8 @@ from web2doc.storage.database import (
     DocumentEvidenceRow,
     DocumentRevisionRow,
     ExportRow,
+    FeatureReferenceReviewRow,
+    FeatureReferenceRevisionRow,
     FeatureRow,
     FixtureReceiptRow,
     FrontierItemRow,
@@ -445,6 +449,34 @@ class Repository:
             )
             return self._distillation_result(attempt, features, reused=True)
 
+    def get_distillation_result(self, processing_attempt_id: str) -> DistillationResult:
+        with self.sessions() as session:
+            attempt = session.get(ProcessingAttemptRow, processing_attempt_id)
+            if attempt is None or attempt.stage != "distillation" or attempt.status != "completed":
+                raise KeyError(f"completed distillation not found: {processing_attempt_id}")
+            features = tuple(
+                session.scalars(
+                    select(DistilledFeatureRow)
+                    .where(DistilledFeatureRow.processing_attempt_id == attempt.id)
+                    .order_by(DistilledFeatureRow.title, DistilledFeatureRow.id)
+                )
+            )
+            return self._distillation_result(attempt, features, reused=True)
+
+    def manifest_scope(self, manifest_id: str) -> tuple[str, str, str]:
+        """Return project, role identifier, and role name for an immutable manifest."""
+
+        with self.sessions() as session:
+            row = session.execute(
+                select(RunRow.project_id, RunRow.role_id, RoleRow.name)
+                .join(CaptureManifestRow, CaptureManifestRow.run_id == RunRow.id)
+                .join(RoleRow, RoleRow.id == RunRow.role_id)
+                .where(CaptureManifestRow.id == manifest_id)
+            ).one_or_none()
+            if row is None:
+                raise KeyError(f"capture manifest not found: {manifest_id}")
+            return str(row[0]), str(row[1]), str(row[2])
+
     def start_distillation(
         self, manifest_id: str, processor_name: str, configuration_hash: str
     ) -> ProcessingAttemptRow:
@@ -790,6 +822,56 @@ class Repository:
                 )
                 or 0
             ) > 0
+
+    def explored_action_count(self, run_id: str, action_signature: str) -> int:
+        with self.sessions() as session:
+            count = session.scalar(
+                select(func.count(FrontierItemRow.id)).where(
+                    FrontierItemRow.run_id == run_id,
+                    FrontierItemRow.action_signature == action_signature,
+                    FrontierItemRow.status == FrontierStatus.EXPLORED,
+                )
+            )
+            return int(count or 0)
+
+    def explored_state_visit_count(self, run_id: str, state_id: str) -> int:
+        """Count discovery frontier actions that reached a state, excluding path restoration."""
+
+        with self.sessions() as session:
+            count = session.scalar(
+                select(func.count(TransitionRow.id))
+                .join(FrontierItemRow, FrontierItemRow.attempt_id == TransitionRow.attempt_id)
+                .where(
+                    TransitionRow.run_id == run_id,
+                    TransitionRow.target_state_id == state_id,
+                    FrontierItemRow.status == FrontierStatus.EXPLORED,
+                )
+            )
+            return int(count or 0)
+
+    def skip_pending_frontier_for_state(self, run_id: str, state_id: str, reason: str) -> int:
+        with self.sessions.begin() as session:
+            result = session.execute(
+                update(FrontierItemRow)
+                .where(
+                    FrontierItemRow.run_id == run_id,
+                    FrontierItemRow.state_id == state_id,
+                    FrontierItemRow.status == FrontierStatus.PENDING,
+                )
+                .values(status=FrontierStatus.SKIPPED, reason=reason, updated_at=utc_now())
+            )
+            return int(result.rowcount)  # type: ignore[attr-defined]
+
+    def discovery_state_algorithm_versions(self, run_id: str) -> set[str]:
+        with self.sessions() as session:
+            return set(
+                session.scalars(
+                    select(StateRow.algorithm_version)
+                    .join(ObservationRow, ObservationRow.state_id == StateRow.id)
+                    .where(ObservationRow.run_id == run_id)
+                    .distinct()
+                )
+            )
 
     def set_frontier_status(
         self,
@@ -1330,6 +1412,146 @@ class Repository:
                 content=DocumentContent.model_validate_json(row.content_json),
             )
 
+    def add_feature_reference_revision(
+        self,
+        *,
+        project_id: str,
+        role_id: str,
+        processing_attempt_id: str,
+        reference_key: str,
+        content: FeatureReferenceContent,
+        source_kind: str = "generated",
+    ) -> FeatureReferenceRevision:
+        canonical = json.dumps(content.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        content_hash = sha256(canonical.encode()).hexdigest()
+        with self.sessions.begin() as session:
+            attempt = session.get(ProcessingAttemptRow, processing_attempt_id)
+            if attempt is None or attempt.status != "completed" or attempt.stage != "distillation":
+                raise ValueError("feature reference requires a completed distillation")
+            scope = session.execute(
+                select(RunRow.project_id, RunRow.role_id)
+                .join(CaptureManifestRow, CaptureManifestRow.run_id == RunRow.id)
+                .where(CaptureManifestRow.id == attempt.manifest_id)
+            ).one()
+            if scope != (project_id, role_id):
+                raise ValueError("distillation does not belong to the selected project and role")
+            existing = session.scalar(
+                select(FeatureReferenceRevisionRow).where(
+                    FeatureReferenceRevisionRow.project_id == project_id,
+                    FeatureReferenceRevisionRow.role_id == role_id,
+                    FeatureReferenceRevisionRow.reference_key == reference_key,
+                    FeatureReferenceRevisionRow.content_hash == content_hash,
+                )
+            )
+            if existing is not None:
+                return self._feature_reference_revision(existing)
+            latest = session.scalar(
+                select(FeatureReferenceRevisionRow)
+                .where(
+                    FeatureReferenceRevisionRow.project_id == project_id,
+                    FeatureReferenceRevisionRow.role_id == role_id,
+                    FeatureReferenceRevisionRow.reference_key == reference_key,
+                )
+                .order_by(FeatureReferenceRevisionRow.version.desc())
+                .limit(1)
+            )
+            row = FeatureReferenceRevisionRow(
+                id=new_id(),
+                project_id=project_id,
+                role_id=role_id,
+                processing_attempt_id=processing_attempt_id,
+                reference_key=reference_key,
+                parent_revision_id=latest.id if latest is not None else None,
+                version=(latest.version + 1) if latest is not None else 1,
+                content_hash=content_hash,
+                source_kind=source_kind,
+                content_json=canonical,
+                created_at=utc_now(),
+            )
+            session.add(row)
+            session.flush()
+            return self._feature_reference_revision(row)
+
+    def get_feature_reference_revision(self, revision_id: str) -> FeatureReferenceRevision:
+        with self.sessions() as session:
+            row = session.get(FeatureReferenceRevisionRow, revision_id)
+            if row is None:
+                raise KeyError(f"feature reference revision not found: {revision_id}")
+            return self._feature_reference_revision(row)
+
+    @staticmethod
+    def _feature_reference_revision(row: FeatureReferenceRevisionRow) -> FeatureReferenceRevision:
+        return FeatureReferenceRevision(
+            id=row.id,
+            project_id=row.project_id,
+            role_id=row.role_id,
+            processing_attempt_id=row.processing_attempt_id,
+            reference_key=row.reference_key,
+            version=row.version,
+            content_hash=row.content_hash,
+            source_kind=row.source_kind,
+            content=FeatureReferenceContent.model_validate_json(row.content_json),
+        )
+
+    def add_feature_reference_review(
+        self,
+        revision_id: str,
+        decision: ReviewDecision,
+        reviewer: str,
+        notes: str,
+    ) -> FeatureReferenceReviewRow:
+        if not reviewer.strip():
+            raise ValueError("reviewer cannot be blank")
+        with self.sessions.begin() as session:
+            if session.get(FeatureReferenceRevisionRow, revision_id) is None:
+                raise KeyError(f"feature reference revision not found: {revision_id}")
+            row = FeatureReferenceReviewRow(
+                id=new_id(),
+                feature_reference_revision_id=revision_id,
+                decision=decision,
+                reviewer=reviewer.strip(),
+                notes=notes,
+                created_at=utc_now(),
+            )
+            session.add(row)
+            return row
+
+    def approved_feature_reference_revisions(self, project_id: str) -> list[FeatureReferenceRevision]:
+        with self.sessions() as session:
+            identities = tuple(
+                session.execute(
+                    select(
+                        FeatureReferenceRevisionRow.role_id,
+                        FeatureReferenceRevisionRow.reference_key,
+                    )
+                    .where(FeatureReferenceRevisionRow.project_id == project_id)
+                    .distinct()
+                )
+            )
+            values: list[FeatureReferenceRevision] = []
+            for role_id, reference_key in identities:
+                revision = session.scalar(
+                    select(FeatureReferenceRevisionRow)
+                    .where(
+                        FeatureReferenceRevisionRow.project_id == project_id,
+                        FeatureReferenceRevisionRow.role_id == role_id,
+                        FeatureReferenceRevisionRow.reference_key == reference_key,
+                    )
+                    .order_by(FeatureReferenceRevisionRow.version.desc())
+                    .limit(1)
+                )
+                if revision is None:
+                    continue
+                review = session.scalar(
+                    select(FeatureReferenceReviewRow)
+                    .where(FeatureReferenceReviewRow.feature_reference_revision_id == revision.id)
+                    .order_by(FeatureReferenceReviewRow.created_at.desc())
+                    .limit(1)
+                )
+                if review is not None and review.decision == ReviewDecision.APPROVED:
+                    values.append(self._feature_reference_revision(revision))
+            return sorted(values, key=lambda item: (item.content.title.casefold(), item.reference_key))
+
     def add_review_decision(
         self,
         document_revision_id: str,
@@ -1508,15 +1730,72 @@ class Repository:
                 }
                 for feature in features
             ]
+            reference_entries: list[dict[str, Any]] = []
+            reference_identities = tuple(
+                session.execute(
+                    select(
+                        FeatureReferenceRevisionRow.role_id,
+                        FeatureReferenceRevisionRow.reference_key,
+                    )
+                    .where(FeatureReferenceRevisionRow.project_id == project_id)
+                    .distinct()
+                )
+            )
+            for role_id, reference_key in reference_identities:
+                reference = session.scalar(
+                    select(FeatureReferenceRevisionRow)
+                    .where(
+                        FeatureReferenceRevisionRow.project_id == project_id,
+                        FeatureReferenceRevisionRow.role_id == role_id,
+                        FeatureReferenceRevisionRow.reference_key == reference_key,
+                    )
+                    .order_by(FeatureReferenceRevisionRow.version.desc())
+                    .limit(1)
+                )
+                if reference is None:
+                    continue
+                review = session.scalar(
+                    select(FeatureReferenceReviewRow)
+                    .where(FeatureReferenceReviewRow.feature_reference_revision_id == reference.id)
+                    .order_by(FeatureReferenceReviewRow.created_at.desc())
+                    .limit(1)
+                )
+                content = FeatureReferenceContent.model_validate_json(reference.content_json)
+                reference_entries.append(
+                    {
+                        "reference_key": reference.reference_key,
+                        "title": content.title,
+                        "document_revision_id": reference.id,
+                        "review": review.decision if review is not None else "missing",
+                        "eligible_for_export": (
+                            review is not None and review.decision == ReviewDecision.APPROVED
+                        ),
+                        "evidence_levels": sorted(
+                            {
+                                evidence.support.value
+                                for section in content.sections
+                                for evidence in section.evidence
+                            }
+                        ),
+                        "unresolved": content.unresolved,
+                    }
+                )
             return {
                 "summary": {
                     "workflows": len(entries),
                     "exportable_workflows": sum(1 for entry in entries if entry["eligible_for_export"]),
                     "features": len(feature_entries),
                     "unverified_features": sum(1 for feature in feature_entries if not feature["verified"]),
+                    "feature_references": len(reference_entries),
+                    "exportable_feature_references": sum(
+                        1 for entry in reference_entries if entry["eligible_for_export"]
+                    ),
                 },
                 "workflows": entries,
                 "features": feature_entries,
+                "feature_references": sorted(
+                    reference_entries, key=lambda entry: str(entry["title"]).casefold()
+                ),
             }
 
     def recover_interrupted(self, project_id: str) -> dict[str, int]:

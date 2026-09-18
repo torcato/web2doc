@@ -20,6 +20,7 @@ from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
 from web2doc.discovery.runner import ExplorationRunner
 from web2doc.distillation.service import DistillationService
 from web2doc.documentation.composer import DeterministicComposer, PydanticAIDocumentComposer
+from web2doc.documentation.features import FeatureReferenceService
 from web2doc.documentation.models import OwnerSourceDraft, OwnerSourceKind, ReviewDecision
 from web2doc.documentation.publish import DocumentationPublisher
 from web2doc.documentation.service import DocumentationService
@@ -326,6 +327,24 @@ def distill(
         repository.close()
 
 
+@app.command("feature-reference-generate")
+def feature_reference_generate(
+    project_dir: Annotated[Path, typer.Argument(help="Project directory")],
+    run_id: Annotated[str, typer.Option("--run", help="Capture or discovery run identifier")],
+) -> None:
+    """Generate reviewable feature-reference pages from saved discovery evidence."""
+
+    _config, repository, _project_id, _roles = _open_project(project_dir)
+    try:
+        distillation = DistillationService(repository, ArtifactStore(project_dir / RUNTIME_DIR))
+        manifest = distillation.freeze(run_id)
+        result = asyncio.run(distillation.distill(manifest.id))
+        references = FeatureReferenceService(repository).generate(result.processing_attempt_id)
+        typer.echo(json.dumps([item.model_dump(mode="json") for item in references], indent=2))
+    finally:
+        repository.close()
+
+
 @app.command("workflow-add")
 def workflow_add(
     project_dir: Annotated[Path, typer.Argument(help="Project directory")],
@@ -498,8 +517,15 @@ def document_review(
 ) -> None:
     _config, repository, _project_id, _roles = _open_project(project_dir)
     try:
-        row = repository.add_review_decision(document_revision_id, decision, reviewer, notes)
-        typer.echo(json.dumps({"id": row.id, "decision": row.decision}, indent=2))
+        try:
+            row = repository.add_review_decision(document_revision_id, decision, reviewer, notes)
+            response = {"id": row.id, "decision": row.decision}
+        except KeyError:
+            feature_review = repository.add_feature_reference_review(
+                document_revision_id, decision, reviewer, notes
+            )
+            response = {"id": feature_review.id, "decision": feature_review.decision}
+        typer.echo(json.dumps(response, indent=2))
     finally:
         repository.close()
 
@@ -663,6 +689,26 @@ def docs_generate(
                 err=True,
             )
             raise typer.Exit(code=1)
+        if isinstance(run_info, dict) and run_info.get("status") == "failed":
+            reason = str(run_info.get("stop_reason") or "unknown discovery failure")
+            typer.echo(f"Discovery failed: {reason}", err=True)
+            typer.echo(
+                f"Review discovery run {discovery_run_id} with: "
+                f"uv run web2doc discovery-report {project_dir} {discovery_run_id}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        artifact_store = ArtifactStore(project_dir / RUNTIME_DIR)
+        distillation = DistillationService(repository, artifact_store)
+        manifest = distillation.freeze(discovery_run_id)
+        distilled = asyncio.run(distillation.distill(manifest.id))
+        feature_references = FeatureReferenceService(repository).generate(
+            distilled.processing_attempt_id
+        )
+        for reference in feature_references:
+            repository.add_feature_reference_review(
+                reference.id, ReviewDecision.APPROVED, reviewer, notes
+            )
         definitions = draft_workflows(repository, discovery_run_id=discovery_run_id, role=role)
         documentation_model = settings.model_for_documentation()
         generated: list[dict[str, object]] = []
@@ -749,6 +795,15 @@ def docs_generate(
             json.dumps(
                 {
                     "discovery_run_id": discovery_run_id,
+                    "feature_references": [
+                        {
+                            "title": reference.content.title,
+                            "document_revision_id": reference.id,
+                            "document_version": reference.version,
+                            "status": "approved",
+                        }
+                        for reference in feature_references
+                    ],
                     "documents": generated,
                     "bulk_approved_document_ids": bulk_approved,
                     "export": str(exported),

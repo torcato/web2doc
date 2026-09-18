@@ -154,6 +154,63 @@ class SlowPlanner:
         raise AssertionError("the run deadline should cancel this call")
 
 
+class VolatileChainlitBrowser:
+    def __init__(self) -> None:
+        self.observation_number = 0
+        self.executed: list[str] = []
+        self.closed = False
+
+    async def start(self, *, run_id: str, headed: bool = False) -> FakeSession:
+        return FakeSession()
+
+    async def observe(self, session: FakeSession) -> ObservationDraft:
+        self.observation_number += 1
+        reference = f"f{self.observation_number}e36"
+        controls: list[ControlDraft] = []
+        structure = f'- button "Chat settings" [ref={reference}] [cursor=pointer]'
+        if session.state == 1:
+            controls = [
+                ControlDraft(role="button", name="New chat"),
+                ControlDraft(role="button", name="Chat settings"),
+                ControlDraft(role="button", name="Attach file"),
+            ]
+        elif session.state == 2:
+            structure = (
+                f'- dialog "Chat settings" [ref={reference}]\n'
+                '- combobox "Model"\n- combobox "Profile"\n- switch "MCP server"'
+            )
+            controls = [
+                ControlDraft(role="combobox", name="Model", options=["fast"]),
+                ControlDraft(role="combobox", name="Profile", options=["default"]),
+                ControlDraft(role="switch", name="MCP server"),
+            ]
+        elif session.state == 3:
+            structure = f'- dialog "Create New Chat" [ref={reference}]'
+        return ObservationDraft(
+            url="http://127.0.0.1:8765/",
+            title="Assistant",
+            aria_snapshot=structure,
+            screenshot=f"png-{self.observation_number}".encode(),
+            controls=controls,
+            active_dialogs=["Chat settings"] if session.state == 2 else [],
+        )
+
+    async def execute(self, session: FakeSession, action) -> ExecutionResult:
+        target = getattr(action, "target", None)
+        name = target.name if target is not None else None
+        self.executed.append(name or action.kind)
+        if action.kind == "navigate":
+            session.state = 1
+        elif name == "Chat settings":
+            session.state = 2
+        elif name == "New chat":
+            session.state = 3
+        return ExecutionResult(final_url="http://127.0.0.1:8765/", message="ok")
+
+    async def close(self, session: FakeSession) -> None:
+        self.closed = True
+
+
 def make_runner(repository, tmp_path: Path, project_config, browser, planner):
     project_id, roles = repository.register_project(tmp_path, project_config)
     return ExplorationRunner(
@@ -315,10 +372,44 @@ async def test_planner_retries_are_bounded_and_usage_is_conservative(repository,
     report = repository.discovery_report(run_id)
 
     assert planner.calls == 3
-    assert report["run"]["status"] == "paused"
-    assert str(report["run"]["stop_reason"]).startswith("planner_failed")
+    assert report["run"]["status"] == "awaiting_review"
+    assert report["run"]["stop_reason"] == "frontier_exhausted"
     assert report["coverage"]["model_calls"] == 3
     assert report["coverage"]["output_tokens"] == 6_000
+
+
+@pytest.mark.asyncio
+async def test_model_budget_exhaustion_falls_back_to_deterministic_planning(
+    repository, tmp_path, project_config
+) -> None:
+    browser = DiscoveryBrowser()
+    planner = FailingPlanner()
+    runner = make_runner(repository, tmp_path, project_config, browser, planner)
+
+    run_id = await runner.run(
+        mode=DiscoveryMode.UNGUIDED,
+        limits=DiscoveryLimits(max_model_calls=0),
+    )
+
+    assert repository.get_run(run_id).stop_reason == "frontier_exhausted"
+    assert planner.calls == 0
+    assert browser.executed == ["navigate", "click"]
+
+
+@pytest.mark.asyncio
+async def test_volatile_refs_do_not_starve_chainlit_settings(repository, tmp_path, project_config) -> None:
+    browser = VolatileChainlitBrowser()
+    runner = make_runner(repository, tmp_path, project_config, browser, HeuristicPlanner())
+
+    run_id = await runner.run(mode=DiscoveryMode.UNGUIDED)
+    report = repository.discovery_report(run_id)
+
+    assert browser.executed.index("Chat settings") < browser.executed.index("New chat")
+    assert browser.executed.count("New chat") == 1
+    assert report["coverage"]["states"] == 3
+    assert {"Model", "Profile", "MCP server"} <= {
+        feature["title"] for feature in report["features"]
+    }
 
 
 @pytest.mark.asyncio

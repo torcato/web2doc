@@ -5,7 +5,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from web2doc.documentation.models import DocumentContent
+from web2doc.documentation.models import DocumentContent, FeatureReferenceContent
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_[\]{}()#+.!|>-])")
 
@@ -25,8 +25,16 @@ class MarkdownRenderer:
         )
         environment.filters["md"] = markdown_escape
         self.template = environment.get_template("guide.md.j2")
+        self.reference_template = environment.get_template("reference.md.j2")
 
     def render(self, document: DocumentContent, *, evidence_prefix: str = "") -> str:
         if evidence_prefix not in {"", "../"}:
             raise ValueError("unsupported evidence link prefix")
         return self.template.render(document=document, evidence_prefix=evidence_prefix)
+
+    def render_reference(
+        self, document: FeatureReferenceContent, *, evidence_prefix: str = ""
+    ) -> str:
+        if evidence_prefix not in {"", "../"}:
+            raise ValueError("unsupported evidence link prefix")
+        return self.reference_template.render(document=document, evidence_prefix=evidence_prefix)

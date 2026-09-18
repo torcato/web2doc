@@ -3,7 +3,7 @@ from __future__ import annotations
 from hypothesis import given
 from hypothesis import strategies as st
 
-from web2doc.discovery.candidates import enumerate_candidates
+from web2doc.discovery.candidates import coverage_priority, enumerate_candidates
 from web2doc.discovery.state import StateCanonicalizer
 from web2doc.domain.models import ControlDraft, DiscoveryConfig, ObservationDraft
 
@@ -59,6 +59,34 @@ def test_model_view_redacts_secret_values_without_obeying_page_text() -> None:
     assert "<redacted>" in view.structure
 
 
+def test_state_identity_removes_transient_aria_markers_but_preserves_ui_state() -> None:
+    canonicalizer = StateCanonicalizer(DiscoveryConfig())
+    first = observation(
+        url="https://example.test/",
+        aria='- button "Settings" [ref=e12] [cursor=pointer]\n- checkbox "MCP" [checked]',
+    )
+    second = observation(
+        url="https://example.test/",
+        aria='- button "Settings" [active] [ref=f9e44] [cursor=pointer]\n- checkbox "MCP" [checked]',
+    )
+
+    first_id = canonicalizer.canonicalize(first, role="admin", scenario="default")
+    second_id = canonicalizer.canonicalize(second, role="admin", scenario="default")
+
+    assert first_id.fingerprint == second_id.fingerprint
+    assert "ref=" not in first_id.normalized_structure
+    assert "cursor=" not in first_id.normalized_structure
+    assert "[active]" not in second_id.normalized_structure
+    assert "[checked]" in second_id.normalized_structure
+    unchecked = second.model_copy(
+        update={"aria_snapshot": '- button "Settings" [ref=e1]\n- checkbox "MCP"'}
+    )
+    assert (
+        canonicalizer.canonicalize(unchecked, role="admin", scenario="default").fingerprint
+        != first_id.fingerprint
+    )
+
+
 URL_TEXT = st.text(alphabet="abcdefghijklmnopqrstuvwxyz0123456789", min_size=1, max_size=8)
 
 
@@ -102,6 +130,22 @@ def test_candidate_enumeration_excludes_unnamed_controls() -> None:
     )
 
     assert enumerate_candidates(draft) == []
+
+
+def test_coverage_priority_keeps_settings_ahead_of_state_reset_actions() -> None:
+    draft = observation(
+        url="https://example.test/",
+        aria="chat",
+        controls=[
+            ControlDraft(role="button", name="New chat"),
+            ControlDraft(role="button", name="Chat settings"),
+            ControlDraft(role="button", name="Attach file"),
+        ],
+    )
+    candidates = {candidate.label: candidate for candidate in enumerate_candidates(draft)}
+
+    assert coverage_priority(candidates["Chat settings"]) > coverage_priority(candidates["Attach file"])
+    assert coverage_priority(candidates["Attach file"]) > coverage_priority(candidates["New chat"])
 
 
 def test_candidate_enumeration_excludes_dismissive_controls_as_tasks() -> None:

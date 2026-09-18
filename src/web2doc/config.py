@@ -84,6 +84,7 @@ def initialize_project(project_dir: Path, name: str, base_url: str) -> Path:
                 "max_tokens_per_call = 2000",
                 "max_candidates_per_state = 20",
                 "max_visits_per_state = 3",
+                "max_repeats_per_action = 3",
                 "model_retries = 2",
                 "",
             ]

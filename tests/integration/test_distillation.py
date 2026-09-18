@@ -7,6 +7,9 @@ import pytest
 from web2doc.discovery.models import StateIdentity
 from web2doc.distillation.models import CaptureManifest, DistilledFeature
 from web2doc.distillation.service import DistillationService
+from web2doc.documentation.features import FeatureReferenceService
+from web2doc.documentation.models import ReviewDecision
+from web2doc.documentation.publish import DocumentationPublisher
 from web2doc.domain.models import (
     DiscoveryMode,
     ObservationDraft,
@@ -131,3 +134,60 @@ async def test_failed_offline_processing_retries_without_changing_capture(
     assert result.status == "completed"
     assert distiller.calls == 2
     assert repository.discovery_usage(run_id)["actions"] == 0
+
+
+@pytest.mark.asyncio
+async def test_observed_features_publish_without_verified_workflows(
+    repository, tmp_path: Path, project_config
+) -> None:
+    run_id, distillation = seed_capture(repository, tmp_path, project_config)
+    initial = distillation.freeze(run_id)
+    observation = initial.content.observations[0]
+    project_id, role_id, _role_name = repository.manifest_scope(initial.id)
+    for title in ("Model", "Prompt profile", "MCP server"):
+        repository.add_feature(
+            run_id=run_id,
+            role_id=role_id,
+            state_id=str(observation.state_id),
+            observation_id=observation.id,
+            title=title,
+            description=f"Observed {title} control.",
+            confidence=0.9,
+        )
+    manifest = distillation.freeze(run_id)
+    result = await distillation.distill(manifest.id)
+
+    references = FeatureReferenceService(repository).generate(result.processing_attempt_id)
+
+    assert [reference.content.title for reference in references] == ["Application settings"]
+    assert {section.title for section in references[0].content.sections} == {
+        "MCP server",
+        "Model",
+        "Prompt profile",
+    }
+    for reference in references:
+        repository.add_feature_reference_review(
+            reference.id,
+            ReviewDecision.APPROVED,
+            "Documentation owner",
+            "Observed claims checked",
+        )
+    feature_publisher = DocumentationPublisher(
+        repository=repository,
+        artifacts=ArtifactStore(tmp_path / ".web2doc"),
+        project_id=project_id,
+        project_root=tmp_path,
+    )
+    _json_report, markdown_report = feature_publisher.write_coverage_report()
+    assert "| Application settings | observed | approved | yes |" in markdown_report.read_text(
+        encoding="utf-8"
+    )
+    exported = feature_publisher.export_approved(tmp_path / "feature-export")
+
+    reference_page = exported / "docs" / "features" / "application-settings.md"
+    assert reference_page.is_file()
+    content = reference_page.read_text(encoding="utf-8")
+    assert "## Model" in content
+    assert "## Prompt profile" in content
+    assert "## MCP server" in content
+    assert (exported / "site" / "index.html").is_file()

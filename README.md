@@ -131,7 +131,24 @@ transitions, frontier coverage, and candidate features. Freezing unchanged evide
 `distill` does not open a browser or log in to the target application. It reuses a successful result when its manifest
 and processor configuration are unchanged, while a failed processing attempt can be retried with the same command.
 This first offline-processing slice creates evidence-linked feature drafts; feature-reference publishing remains a
-planned migration step described in `docs/development-plan.md`.
+separate stage. Generate reviewable feature-reference revisions from a saved run with:
+
+```bash
+uv run web2doc feature-reference-generate demo --run DISCOVERY_RUN_ID
+```
+
+The generator groups settings controls and their observed choices into a reference page instead of emitting one page
+per raw control or option. Use the existing `document-bundle` and `document-review` commands with the returned revision
+IDs. Approved feature references are included by `docs-export` alongside verified workflow guides.
+
+Run discovery, manifest creation, and offline distillation together with:
+
+```bash
+./scripts/capture-distill.sh demo
+```
+
+The script accepts the discovery overrides `--role`, `--model`, `--max-actions`, `--max-states`, `--max-seconds`,
+`--max-candidates-per-state`, and `--headed`. It requires `jq`.
 
 Draft workflow revisions from explored transitions, or import a reviewed workflow definition:
 
@@ -209,6 +226,14 @@ The target application must already be running and `demo/project.toml` must cont
 Use `--headed` to watch the browser, `--role ROLE` for another authenticated role, and
 `--trusted-fixture-api` only when the target intentionally exposes the documented fixture endpoints.
 Add `--model PROVIDER:MODEL` to use a Pydantic AI planner; omit it for deterministic discovery.
+Important interface entry points receive deterministic coverage priority even when a model ranks candidates. Discovery
+also limits repeated actions and repeated visits to equivalent states. Configure these controls with
+`discovery.limits.max_repeats_per_action` and `discovery.limits.max_visits_per_state` in `project.toml`.
+If model planning fails or exhausts its model-call/token allowance, exploration continues with deterministic ranking.
+
+Current runs use the `state-v2` fingerprint, which removes volatile browser references while preserving meaningful UI
+state. Runs captured with an older fingerprint remain available for reports and offline processing, but must not be
+resumed; start a fresh discovery run after upgrading.
 
 The helper does not approve documents automatically. After inspecting each printed review bundle, copy the ready-to-run
 review command printed by the helper and export the approved set:
@@ -224,13 +249,17 @@ uv run web2doc docs-export demo ./published-documentation
 The helper requires `jq` and leaves runtime evidence, workflow revisions, and generated bundles under
 `demo/.web2doc/`. A failed or inconclusive task is reported and skipped so passing tasks can still produce drafts.
 
-For a fully automated build, including bulk approval of every passing generated document, use the Python CLI command:
+For a fully automated build, including capture distillation, grouped feature references, bulk approval, verified
+workflow guides, and export, use the Python CLI command:
 
 ```bash
 uv run web2doc docs-generate demo ./published-documentation \
   --reviewer "Documentation owner" \
   --notes "Automated bulk approval after verification"
 ```
+
+Observed feature references do not require a workflow to exist. They state only what the captured interface supports
+and label evidence as observed or demonstrated; behavioral outcome claims remain restricted to verified guides.
 
 To resume a budget-exhausted discovery and then continue verification, approval, and export in one command, pass its
 run ID. For resumed runs, the `--max-*` values are additional budgets:

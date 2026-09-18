@@ -8,7 +8,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-from web2doc.documentation.models import DocumentRevision, EvidenceReference
+from web2doc.documentation.models import (
+    DocumentRevision,
+    EvidenceReference,
+    FeatureEvidenceReference,
+    FeatureReferenceRevision,
+)
 from web2doc.documentation.render import MarkdownRenderer, markdown_escape
 from web2doc.storage.artifacts import ArtifactStore
 from web2doc.storage.repository import Repository
@@ -32,7 +37,10 @@ class DocumentationPublisher:
         self.renderer = MarkdownRenderer()
 
     def create_review_bundle(self, document_revision_id: str) -> Path:
-        document = self.repository.get_document_revision(document_revision_id)
+        try:
+            document = self.repository.get_document_revision(document_revision_id)
+        except KeyError:
+            return self._create_feature_review_bundle(document_revision_id)
         self.repository.verification_evidence_context(
             self.project_id, document.workflow_revision_id, document.verification_id
         )
@@ -68,20 +76,64 @@ class DocumentationPublisher:
             raise
         return output
 
+    def _create_feature_review_bundle(self, revision_id: str) -> Path:
+        document = self.repository.get_feature_reference_revision(revision_id)
+        if document.project_id != self.project_id:
+            raise KeyError(f"feature reference revision not found in project: {revision_id}")
+        _require_safe(document.id)
+        review_root = self.project_root / ".web2doc" / "review"
+        output = review_root / document.id
+        if output.exists():
+            raise FileExistsError(f"review bundle already exists: {output}")
+        review_root.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix=".bundle-", dir=review_root))
+        try:
+            (temporary / "reference.md").write_text(
+                self.renderer.render_reference(document.content), encoding="utf-8"
+            )
+            self._write_feature_evidence(temporary, document)
+            (temporary / "document.json").write_text(
+                document.content.model_dump_json(indent=2), encoding="utf-8"
+            )
+            (temporary / "REVIEW.md").write_text(
+                "\n".join(
+                    [
+                        "# Feature-reference review",
+                        "",
+                        f"- Document revision: `{document.id}`",
+                        f"- Distillation attempt: `{document.processing_attempt_id}`",
+                        "",
+                        "Approve only observed or demonstrated interface claims. "
+                        "This reference does not assert that unverified changes were saved.",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temporary, output)
+        except BaseException:
+            _remove_temporary_tree(temporary)
+            raise
+        return output
+
     def export_approved(self, output_dir: Path) -> Path:
         target = output_dir.resolve()
         if target.exists():
             raise FileExistsError(f"export path already exists: {target}")
         documents = self.repository.approved_document_revisions(self.project_id)
-        if not documents:
+        references = self.repository.approved_feature_reference_revisions(self.project_id)
+        if not documents and not references:
             raise ValueError("no latest document revisions have an approving review decision")
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix=".web2doc-export-", dir=target.parent))
         try:
             docs_root = temporary / "docs"
             guides = docs_root / "guides"
-            guides.mkdir(parents=True)
+            features = docs_root / "features"
+            docs_root.mkdir(parents=True)
             navigation: list[dict[str, str]] = []
+            if documents:
+                guides.mkdir()
             for document in documents:
                 workflow = self.repository.get_workflow_revision(document.workflow_revision_id)
                 key = workflow.definition.workflow_key
@@ -90,17 +142,41 @@ class DocumentationPublisher:
                 guide.write_text(self.renderer.render(document.content, evidence_prefix="../"), encoding="utf-8")
                 self._write_evidence(docs_root, document)
                 navigation.append({document.content.title: f"guides/{key}.md"})
+            feature_navigation: list[dict[str, str]] = []
+            if references:
+                features.mkdir()
+            for reference in references:
+                _require_safe(reference.reference_key)
+                path = features / f"{reference.reference_key}.md"
+                path.write_text(
+                    self.renderer.render_reference(reference.content, evidence_prefix="../"),
+                    encoding="utf-8",
+                )
+                self._write_feature_evidence(docs_root, reference)
+                feature_navigation.append(
+                    {reference.content.title: f"features/{reference.reference_key}.md"}
+                )
             index_lines = ["# User documentation", ""]
             index_lines.extend(
                 f"- [{markdown_escape(title)}]({path})" for item in navigation for title, path in item.items()
             )
+            index_lines.extend(
+                f"- [{markdown_escape(title)}]({path})"
+                for item in feature_navigation
+                for title, path in item.items()
+            )
             (docs_root / "index.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+            site_navigation: list[dict[str, object]] = [{"Home": "index.md"}]
+            if navigation:
+                site_navigation.append({"Guides": navigation})
+            if feature_navigation:
+                site_navigation.append({"Feature reference": feature_navigation})
             config = {
                 "site_name": "User documentation",
                 "docs_dir": "docs",
                 "site_dir": "site",
                 "strict": True,
-                "nav": [{"Home": "index.md"}, {"Guides": navigation}],
+                "nav": site_navigation,
             }
             (temporary / "mkdocs.yml").write_text(_yaml(config), encoding="utf-8")
             subprocess.run(
@@ -117,7 +193,7 @@ class DocumentationPublisher:
         self.repository.add_export(
             self.project_id,
             str(target),
-            [document.id for document in documents],
+            [document.id for document in documents] + [reference.id for reference in references],
         )
         return target
 
@@ -162,6 +238,29 @@ class DocumentationPublisher:
         )
         for feature in report["features"]:
             lines.append(f"| {markdown_escape(feature['title'])} | {'yes' if feature['verified'] else 'no'} |")
+        lines.extend(
+            [
+                "",
+                "## Feature references",
+                "",
+                "| Reference | Evidence | Review | Exportable | Unresolved |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for reference in report["feature_references"]:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        markdown_escape(reference["title"]),
+                        markdown_escape(", ".join(reference["evidence_levels"])),
+                        markdown_escape(reference["review"]),
+                        "yes" if reference["eligible_for_export"] else "no",
+                        markdown_escape("; ".join(reference["unresolved"]) or "none"),
+                    ]
+                )
+                + " |"
+            )
         json_temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         markdown_temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.replace(json_temporary, json_path)
@@ -203,6 +302,34 @@ class DocumentationPublisher:
                 encoding="utf-8",
             )
 
+    def _write_feature_evidence(self, root: Path, document: FeatureReferenceRevision) -> None:
+        evidence_dir = root / "evidence"
+        asset_dir = root / "assets"
+        evidence_dir.mkdir(exist_ok=True)
+        asset_dir.mkdir(exist_ok=True)
+        for reference in _feature_references(document):
+            _require_safe(reference.observation_id)
+            _require_safe(reference.screenshot_artifact_id)
+            artifact = self.repository.artifact_draft(reference.screenshot_artifact_id)
+            if artifact.media_type != "image/png":
+                raise ValueError("feature-reference screenshot is not a PNG artifact")
+            content = self.artifacts.read_verified(artifact)
+            (asset_dir / f"{artifact.id}.png").write_bytes(content)
+            (evidence_dir / f"{reference.observation_id}.md").write_text(
+                "\n".join(
+                    [
+                        "# Captured interface evidence",
+                        "",
+                        f"- Evidence level: `{reference.support.value}`",
+                        f"- Observation: `{reference.observation_id}`",
+                        "",
+                        f"![Captured browser state](../assets/{reference.screenshot_artifact_id}.png)",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
 
 def _references(document: DocumentRevision) -> list[EvidenceReference]:
     claims = [document.content.summary, document.content.goal, document.content.outcome]
@@ -214,6 +341,14 @@ def _references(document: DocumentRevision) -> list[EvidenceReference]:
     unique: dict[tuple[str, str], EvidenceReference] = {}
     for claim in claims:
         for reference in claim.evidence:
+            unique[(reference.observation_id, reference.screenshot_artifact_id)] = reference
+    return list(unique.values())
+
+
+def _feature_references(document: FeatureReferenceRevision) -> list[FeatureEvidenceReference]:
+    unique: dict[tuple[str, str], FeatureEvidenceReference] = {}
+    for section in document.content.sections:
+        for reference in section.evidence:
             unique[(reference.observation_id, reference.screenshot_artifact_id)] = reference
     return list(unique.values())
 

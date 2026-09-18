@@ -1,0 +1,34 @@
+# {{ document.title | md }}
+
+{{ document.summary | md }}
+
+**Role:** {{ document.role | md }}
+
+{% for section in document.sections %}
+## {{ section.title | md }}
+
+{{ section.description | md }} [[🔍]({{ evidence_prefix }}evidence/{{ section.evidence[0].observation_id }}.md)]
+
+**Evidence level:** {{ section.evidence[0].support.value | title }}
+
+{% if section.options %}
+Observed options:
+
+{% for option in section.options %}
+- {{ option | md }}
+{% endfor %}
+{% endif %}
+<details>
+<summary>View captured interface</summary>
+
+<img src="{{ evidence_prefix }}assets/{{ section.evidence[0].screenshot_artifact_id }}.png" alt="Captured interface for {{ section.title | md }}">
+</details>
+
+{% endfor %}
+{% if document.unresolved %}
+## Evidence limitations
+
+{% for item in document.unresolved %}
+- {{ item | md }}
+{% endfor %}
+{% endif %}

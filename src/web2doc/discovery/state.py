@@ -8,8 +8,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from web2doc.discovery.models import ModelObservation, StateIdentity
 from web2doc.domain.models import DiscoveryConfig, ObservationDraft
 
-FINGERPRINT_VERSION = "state-v1"
+FINGERPRINT_VERSION = "state-v2"
 SECRET_PATTERN = re.compile(r"(?i)\b(password|secret|access[_ -]?token|api[_ -]?key|authorization)\b\s*[:=]\s*[^\s,;]+")
+TRANSIENT_ARIA_MARKER = re.compile(r"\s*\[(?:ref=[^\]]+|cursor=[^\]]+|active)\]")
 
 
 class StateCanonicalizer:
@@ -19,7 +20,7 @@ class StateCanonicalizer:
 
     def canonicalize(self, observation: ObservationDraft, *, role: str, scenario: str) -> StateIdentity:
         route = self.normalize_route(observation.url)
-        structure = self.sanitize_text(observation.aria_snapshot)
+        structure = self.normalize_structure(observation.aria_snapshot)
         payload = {
             "version": FINGERPRINT_VERSION,
             "role": role,
@@ -44,7 +45,7 @@ class StateCanonicalizer:
         return ModelObservation(
             route=self.normalize_route(observation.url),
             title=self.sanitize_text(observation.title)[:500],
-            structure=self.sanitize_text(observation.aria_snapshot)[:max_characters],
+            structure=self.normalize_structure(observation.aria_snapshot)[:max_characters],
             active_dialogs=[self.sanitize_text(value) for value in observation.active_dialogs],
             selected_tabs=[self.sanitize_text(value) for value in observation.selected_tabs],
             alerts=[self.sanitize_text(value) for value in observation.alerts],
@@ -68,3 +69,8 @@ class StateCanonicalizer:
             sanitized = pattern.sub("<volatile>", sanitized)
         lines = (" ".join(line.split()) for line in sanitized.splitlines())
         return "\n".join(line for line in lines if line)
+
+    def normalize_structure(self, value: str) -> str:
+        """Remove browser-session metadata while preserving meaningful UI state."""
+
+        return self.sanitize_text(TRANSIENT_ARIA_MARKER.sub("", value))

@@ -9,16 +9,17 @@ from pydantic import TypeAdapter
 
 from web2doc.browser.base import AmbiguousTargetError, BrowserAdapter, TargetNotFoundError
 from web2doc.discovery.budget import BudgetTracker
-from web2doc.discovery.candidates import enumerate_candidates
+from web2doc.discovery.candidates import coverage_priority, enumerate_candidates
 from web2doc.discovery.models import (
     CandidateAction,
     DiscoveryStop,
     FrontierStatus,
+    ModelObservation,
     PlannerUsage,
     RankedCandidate,
 )
-from web2doc.discovery.planner import ModelPlanner
-from web2doc.discovery.state import StateCanonicalizer
+from web2doc.discovery.planner import HeuristicPlanner, ModelPlanner
+from web2doc.discovery.state import FINGERPRINT_VERSION, StateCanonicalizer
 from web2doc.domain.models import (
     Action,
     AttemptStatus,
@@ -83,6 +84,7 @@ class ExplorationRunner[SessionT]:
         self.role_id = role_id
         self.role_name = role_name
         self.canonicalizer = StateCanonicalizer(config.discovery)
+        self._planner_disabled_runs: set[str] = set()
 
     async def run(
         self,
@@ -191,6 +193,12 @@ class ExplorationRunner[SessionT]:
             raise ValueError("discovery run does not belong to the selected project and role")
         if run.stage != "discovery" or run.discovery_mode != DiscoveryMode.UNGUIDED:
             raise ValueError("only unguided discovery runs can be resumed")
+        versions = self.repository.discovery_state_algorithm_versions(run_id)
+        if versions and versions != {FINGERPRINT_VERSION}:
+            raise ValueError(
+                "discovery run uses an older state fingerprint algorithm and cannot be resumed safely; "
+                "start a new discovery run"
+            )
         if run.stop_reason not in RESUMABLE_STOPS:
             raise ValueError(
                 f"discovery run cannot be resumed from stop reason {run.stop_reason!r}; "
@@ -362,7 +370,7 @@ class ExplorationRunner[SessionT]:
                             candidate=selected_candidate,
                             path=current_path,
                             rationale=proposal.rationale,
-                            priority=proposal.priority,
+                            priority=(coverage_priority(selected_candidate) * 1_000) + proposal.priority,
                             depth=len(current_path) + 1,
                         )
                         self.repository.add_feature(
@@ -376,6 +384,15 @@ class ExplorationRunner[SessionT]:
                             unresolved=["Candidate feature has not been outcome-verified."],
                         )
 
+            if (
+                self.repository.explored_state_visit_count(run_id, state.id)
+                >= budget.limits.max_visits_per_state
+            ):
+                self.repository.skip_pending_frontier_for_state(
+                    run_id,
+                    state.id,
+                    "state_visit_limit",
+                )
             frontier = self.repository.next_frontier(run_id, state_id=state.id)
             if frontier is None:
                 frontier = self.repository.next_frontier(run_id)
@@ -397,6 +414,16 @@ class ExplorationRunner[SessionT]:
                     blocked_any = True
                     continue
             action = ACTION_ADAPTER.validate_json(frontier.action_json)
+            if (
+                self.repository.explored_action_count(run_id, frontier.action_signature)
+                >= budget.limits.max_repeats_per_action
+            ):
+                self.repository.set_frontier_status(
+                    frontier.id,
+                    FrontierStatus.SKIPPED,
+                    reason="action_repeat_limit",
+                )
+                continue
             decision = self.policy.evaluate(action)
             if not decision.allowed:
                 blocked_any = True
@@ -520,10 +547,15 @@ class ExplorationRunner[SessionT]:
             )
             for candidate in candidates
         ]
+        if self.planner.requires_model_budget and run_id in self._planner_disabled_runs:
+            return await self._deterministic_plan(model_view, model_candidates, budget)
         for attempt_number in range(budget.limits.model_retries + 1):
             if self.planner.requires_model_budget:
                 reason = budget.reserve_model_call()
                 if reason is not None:
+                    if reason in {DiscoveryStop.MODEL_CALL_BUDGET, DiscoveryStop.TOKEN_BUDGET}:
+                        self._planner_disabled_runs.add(run_id)
+                        return await self._deterministic_plan(model_view, model_candidates, budget)
                     self._stop(run_id, reason)
                     return None
             started = monotonic()
@@ -544,7 +576,7 @@ class ExplorationRunner[SessionT]:
                     budget.record_model_usage(unknown)
                     self.repository.add_usage_event(
                         run_id,
-                        "unavailable",
+                        f"unavailable:{type(exc).__name__}",
                         unknown,
                         int((monotonic() - started) * 1_000),
                     )
@@ -552,12 +584,8 @@ class ExplorationRunner[SessionT]:
                     self._stop(run_id, DiscoveryStop.TIME_BUDGET)
                     return None
                 if attempt_number >= budget.limits.model_retries:
-                    self.repository.set_run_status(
-                        run_id,
-                        RunStatus.PAUSED,
-                        f"{DiscoveryStop.PLANNER_FAILED}: {exc}",
-                    )
-                    return None
+                    self._planner_disabled_runs.add(run_id)
+                    return await self._deterministic_plan(model_view, model_candidates, budget)
                 continue
             if self.planner.requires_model_budget:
                 budget.record_model_usage(result.usage)
@@ -569,6 +597,19 @@ class ExplorationRunner[SessionT]:
                 )
             return result.output.proposals
         return None  # pragma: no cover
+
+    @staticmethod
+    async def _deterministic_plan(
+        model_view: ModelObservation,
+        candidates: list[CandidateAction],
+        budget: BudgetTracker,
+    ) -> list[RankedCandidate]:
+        result = await HeuristicPlanner().propose(
+            model_view,
+            candidates,
+            max_output_tokens=budget.limits.max_tokens_per_call,
+        )
+        return result.output.proposals
 
     async def _execute(
         self,

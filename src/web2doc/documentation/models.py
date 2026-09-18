@@ -10,6 +10,12 @@ class ProvenanceKind(StrEnum):
     OWNER = "owner"
 
 
+class EvidenceLevel(StrEnum):
+    OBSERVED = "observed"
+    DEMONSTRATED = "demonstrated"
+    VERIFIED = "verified"
+
+
 class ReviewDecision(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -99,6 +105,49 @@ class DocumentRevision(BaseModel):
     content_hash: str = Field(min_length=64, max_length=64)
     source_kind: str
     content: DocumentContent
+
+
+class FeatureEvidenceReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation_id: str
+    screenshot_artifact_id: str
+    state_id: str | None = None
+    action_attempt_id: str | None = None
+    support: EvidenceLevel = EvidenceLevel.OBSERVED
+
+
+class FeatureReferenceSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2_000)
+    options: list[str] = Field(default_factory=list, max_length=100)
+    evidence: list[FeatureEvidenceReference] = Field(min_length=1)
+
+
+class FeatureReferenceContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=300)
+    summary: str = Field(min_length=1, max_length=2_000)
+    role: str = Field(min_length=1, max_length=100)
+    sections: list[FeatureReferenceSection] = Field(min_length=1)
+    unresolved: list[str] = Field(default_factory=list, max_length=100)
+
+
+class FeatureReferenceRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    project_id: str
+    role_id: str
+    processing_attempt_id: str
+    reference_key: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version: int = Field(ge=1)
+    content_hash: str = Field(min_length=64, max_length=64)
+    source_kind: str
+    content: FeatureReferenceContent
 
 
 class OwnerSourceDraft(BaseModel):

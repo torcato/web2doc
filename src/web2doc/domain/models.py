@@ -64,6 +64,7 @@ class DiscoveryLimits(BaseModel):
     max_tokens_per_call: int = Field(default=2_000, ge=1)
     max_candidates_per_state: int = Field(default=20, ge=1, le=200)
     max_visits_per_state: int = Field(default=3, ge=1, le=100)
+    max_repeats_per_action: int = Field(default=3, ge=1, le=100)
     model_retries: int = Field(default=2, ge=0, le=10)
 
 

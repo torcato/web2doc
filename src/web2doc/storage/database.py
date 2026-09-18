@@ -404,6 +404,51 @@ class DistilledFeatureRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class FeatureReferenceRevisionRow(Base):
+    __tablename__ = "feature_reference_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "role_id", "reference_key", "version",
+            name="uq_feature_reference_version",
+        ),
+        UniqueConstraint(
+            "project_id", "role_id", "reference_key", "content_hash",
+            name="uq_feature_reference_hash",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    role_id: Mapped[str] = mapped_column(ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False)
+    processing_attempt_id: Mapped[str] = mapped_column(
+        ForeignKey("processing_attempts.id", ondelete="RESTRICT"), nullable=False
+    )
+    reference_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("feature_reference_revisions.id", ondelete="SET NULL")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    content_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FeatureReferenceReviewRow(Base):
+    __tablename__ = "feature_reference_reviews"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    feature_reference_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("feature_reference_revisions.id", ondelete="CASCADE"), nullable=False
+    )
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    reviewer: Mapped[str] = mapped_column(String(200), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def make_engine(database_path: Path) -> Engine:
     database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(f"sqlite:///{database_path}")
