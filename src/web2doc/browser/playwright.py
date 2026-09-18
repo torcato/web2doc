@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,9 @@ from playwright.async_api import (
     Request,
     Route,
     async_playwright,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
 )
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
@@ -144,19 +148,39 @@ class PlaywrightBrowser:
         )
 
     async def observe(self, session: PlaywrightSession) -> ObservationDraft:
-        await self._check_open_pages(session)
-        await self._inject_synthetic_labels(session.page)
-        with suppress(PlaywrightTimeoutError):
-            await session.page.wait_for_load_state("networkidle", timeout=3_000)
+        last_error: PlaywrightError | None = None
+        for attempt in range(3):
+            try:
+                return await self._observe_once(session)
+            except PlaywrightError as exc:
+                last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep(0.1)
 
-        body = session.page.locator("body")
+        assert last_error is not None
+        raise BrowserExecutionError(
+            f"page did not become observable after navigation: {session.page.url}"
+        ) from last_error
+
+    async def _observe_once(self, session: PlaywrightSession) -> ObservationDraft:
+        await self._check_open_pages(session)
+        page = session.page
+        with suppress(PlaywrightTimeoutError):
+            await page.wait_for_load_state("domcontentloaded", timeout=3_000)
+        with suppress(PlaywrightTimeoutError):
+            await page.wait_for_load_state("networkidle", timeout=3_000)
+
+        body = page.locator("body")
+        await body.wait_for(state="attached", timeout=5_000)
+        await self._inject_synthetic_labels(page)
+
         try:
             aria = await body.aria_snapshot(mode="ai", timeout=10_000)
         except TypeError:  # pragma: no cover - compatibility with earlier supported Playwright
             aria = await body.aria_snapshot(timeout=10_000)
-        screenshot = await session.page.screenshot(full_page=True, type="png")
+        screenshot = await page.screenshot(full_page=True, type="png")
         controls = TypeAdapter(list[ControlDraft]).validate_python(
-            await session.page.locator("a[href], button, input, select, textarea, [role]").evaluate_all(
+            await page.locator("a[href], button, input, select, textarea, [role]").evaluate_all(
                 """
                 elements => {
                   const visible = element => {
@@ -236,15 +260,15 @@ class PlaywrightBrowser:
             )
         )
         return ObservationDraft(
-            url=session.page.url,
-            title=await session.page.title(),
+            url=page.url,
+            title=await page.title(),
             aria_snapshot=aria,
             screenshot=screenshot,
             controls=controls,
-            active_dialogs=await self._visible_texts(session.page, '[role="dialog"], dialog[open]'),
-            selected_tabs=await self._visible_texts(session.page, '[role="tab"][aria-selected="true"]'),
-            alerts=await self._visible_texts(session.page, '[role="alert"], [aria-live="assertive"]'),
-            invalid_controls=await self._visible_texts(session.page, '[aria-invalid="true"], :user-invalid'),
+            active_dialogs=await self._visible_texts(page, '[role="dialog"], dialog[open]'),
+            selected_tabs=await self._visible_texts(page, '[role="tab"][aria-selected="true"]'),
+            alerts=await self._visible_texts(page, '[role="alert"], [aria-live="assertive"]'),
+            invalid_controls=await self._visible_texts(page, '[aria-invalid="true"], :user-invalid'),
         )
 
     async def _visible_texts(self, page: Page, selector: str) -> list[str]:

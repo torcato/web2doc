@@ -4,12 +4,16 @@ import socket
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 import uvicorn
+from playwright.async_api import Error as PlaywrightError
 
 from tests.fixtures.site_app import app
+from web2doc.browser.base import BrowserExecutionError
 from web2doc.browser.playwright import (
     AmbiguousTargetError,
     PlaywrightBrowser,
@@ -24,6 +28,7 @@ from web2doc.domain.models import (
     DiscoveryMode,
     FillAction,
     NavigateAction,
+    ObservationDraft,
     PolicyConfig,
     Procedure,
     ProjectConfig,
@@ -227,6 +232,65 @@ def benchmark_workflows(site_url: str) -> list[WorkflowDefinition]:
             final_outcomes=[EnvironmentJsonPredicate(path="items", expected=[])],
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_observation_retries_while_navigation_replaces_document(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ProjectConfig(
+        name="browser test",
+        base_url="https://example.test",
+        allowed_origins={"https://example.test"},
+        roles=[RoleConfig(name="admin")],
+    )
+    browser = PlaywrightBrowser(project_root=tmp_path, config=config, role=config.role("admin"))
+    expected = ObservationDraft(
+        url="https://example.test/dashboard",
+        title="Dashboard",
+        aria_snapshot='- heading "Dashboard"',
+        screenshot=b"png",
+    )
+    attempts = 0
+
+    async def observe_once(_session: Any) -> ObservationDraft:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PlaywrightError('Locator.aria_snapshot: Selector "body" does not match any element')
+        return expected
+
+    monkeypatch.setattr(browser, "_observe_once", observe_once)
+
+    session: Any = SimpleNamespace(page=SimpleNamespace(url="https://example.test/dashboard"))
+    observed = await browser.observe(session)
+
+    assert observed is expected
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_observation_reports_page_that_never_stabilizes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = ProjectConfig(
+        name="browser test",
+        base_url="https://example.test",
+        allowed_origins={"https://example.test"},
+        roles=[RoleConfig(name="admin")],
+    )
+    browser = PlaywrightBrowser(project_root=tmp_path, config=config, role=config.role("admin"))
+
+    async def observe_once(_session: Any) -> ObservationDraft:
+        raise PlaywrightError('Locator.aria_snapshot: Selector "body" does not match any element')
+
+    monkeypatch.setattr(browser, "_observe_once", observe_once)
+
+    session: Any = SimpleNamespace(page=SimpleNamespace(url="https://example.test/dashboard"))
+    with pytest.raises(BrowserExecutionError, match="page did not become observable.*dashboard"):
+        await browser.observe(session)
 
 
 def unused_port() -> int:
