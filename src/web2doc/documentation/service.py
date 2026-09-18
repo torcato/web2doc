@@ -4,6 +4,7 @@ from web2doc.documentation.composer import DocumentComposer
 from web2doc.documentation.models import (
     DocumentClaim,
     DocumentContent,
+    DocumentNarrative,
     DocumentRevision,
     DocumentStep,
     EvidenceReference,
@@ -34,16 +35,19 @@ class DocumentationService:
         composer: DocumentComposer,
         *,
         verification_id: str | None = None,
+        fallback_composer: DocumentComposer | None = None,
     ) -> DocumentRevision:
         context = self._context(workflow_revision_id, verification_id)
-        narrative = await composer.compose(context)
-        expected_sequences = list(range(1, len(context.step_descriptions) + 1))
-        if [step.sequence for step in narrative.steps] != expected_sequences:
-            raise ValueError("composer changed the verified workflow step sequence")
-        if len(narrative.prerequisites) != len(context.prerequisite_descriptions):
-            raise ValueError("composer changed the verified prerequisite count")
-        if narrative.troubleshooting:
-            raise ValueError("composer produced troubleshooting claims without supporting failure evidence")
+        used_fallback = False
+        try:
+            narrative = await composer.compose(context)
+            self._validate_narrative(context, narrative)
+        except Exception:
+            if fallback_composer is None:
+                raise
+            narrative = await fallback_composer.compose(context)
+            self._validate_narrative(context, narrative)
+            used_fallback = True
 
         outcome_reference = context.outcome_evidence
         content = DocumentContent(
@@ -82,8 +86,18 @@ class DocumentationService:
             workflow_revision_id=workflow_revision_id,
             verification_id=context.verification_id,
             content=content,
-            source_kind="generated",
+            source_kind="generated-fallback" if used_fallback else "generated",
         )
+
+    @staticmethod
+    def _validate_narrative(context: GenerationContext, narrative: DocumentNarrative) -> None:
+        expected_sequences = list(range(1, len(context.step_descriptions) + 1))
+        if [step.sequence for step in narrative.steps] != expected_sequences:
+            raise ValueError("composer changed the verified workflow step sequence")
+        if len(narrative.prerequisites) != len(context.prerequisite_descriptions):
+            raise ValueError("composer changed the verified prerequisite count")
+        if narrative.troubleshooting:
+            raise ValueError("composer produced troubleshooting claims without supporting failure evidence")
 
     def revise(
         self,

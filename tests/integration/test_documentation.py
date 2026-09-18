@@ -235,6 +235,41 @@ async def test_unrelated_verification_and_unsupported_composer_output_are_reject
 
 
 @pytest.mark.asyncio
+async def test_invalid_model_narrative_falls_back_without_aborting_generation(
+    repository: Repository, tmp_path: Path, project_config: ProjectConfig
+) -> None:
+    project_id, verification_id, workflow = await verified_workflow(
+        repository, tmp_path, project_config, key="composer-fallback"
+    )
+
+    class InvalidModelComposer:
+        async def compose(self, _context) -> DocumentNarrative:
+            return DocumentNarrative(
+                title="Changed structure",
+                summary="Changed structure",
+                goal="Changed structure",
+                prerequisites=[],
+                steps=[NarrativeStep(sequence=7, instruction="Invented")],
+                outcome="Changed structure",
+                troubleshooting=[],
+            )
+
+    document = await DocumentationService(repository, project_id).generate(
+        workflow.id,
+        InvalidModelComposer(),
+        verification_id=verification_id,
+        fallback_composer=DeterministicComposer(),
+    )
+
+    assert document.source_kind == "generated-fallback"
+    assert [step.sequence for step in document.content.steps] == [1, 2]
+    assert [step.instruction.text for step in document.content.steps] == [
+        "Open the [unsafe](javascript:alert(1)) page",
+        "Confirm the result",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_tampered_evidence_blocks_review_bundle(
     repository: Repository, tmp_path: Path, project_config: ProjectConfig
 ) -> None:

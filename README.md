@@ -141,7 +141,30 @@ The generator groups settings controls and their observed choices into a referen
 per raw control or option. Use the existing `document-bundle` and `document-review` commands with the returned revision
 IDs. Approved feature references are included by `docs-export` alongside verified workflow guides.
 
-Run discovery, manifest creation, and offline distillation together with:
+New captures persist structured control inventories. Native select options are treated as the options available at
+capture time; choices exposed by custom dropdowns are marked as observed rather than exhaustive. Before rendering,
+Web2Doc builds a documentation plan containing the page purpose, controls, widget types, options, audience, evidence,
+and unresolved limitations. The configured documentation model may edit only summaries and section explanations;
+structure, options, and evidence remain application-owned. Invalid model output falls back per page.
+
+Configure the editorial style in `project.toml`:
+
+```toml
+[documentation]
+audience = "Application users"
+tone = "clear, helpful, and explanatory"
+detail = "moderate"
+include_available_options = true
+max_inline_options = 20
+max_editor_seconds = 60
+show_evidence_labels = false
+```
+
+Option lists longer than `max_inline_options` remain complete but render in a collapsible section. Setting
+`show_evidence_labels = false` keeps the main prose user-focused while retaining evidence links and screenshots.
+`max_editor_seconds` bounds each optional model-editing call; a timeout falls back to deterministic prose for that page.
+
+Run discovery, manifest creation, and offline feature distillation together with:
 
 ```bash
 ./scripts/capture-distill.sh demo
@@ -190,6 +213,11 @@ The deterministic composer is the default for reproducible builds. Select a conf
 ```bash
 uv run web2doc document-generate demo WORKFLOW_REVISION_ID --model openai:MODEL_NAME
 ```
+
+Model composition can improve wording but cannot control verified workflow structure. Web2Doc assigns step numbers from
+the verified workflow and validates the returned step and prerequisite counts. When a configured model fails or changes
+that structure, `document-generate` and `docs-generate` fall back to deterministic composition for that document and
+continue; the resulting revision uses the `generated-fallback` source kind.
 
 Review applies to one exact document revision. Editing `document.json` from the review bundle and importing it creates a new revision whose parent approval does not carry forward:
 

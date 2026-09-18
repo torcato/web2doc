@@ -306,6 +306,7 @@ class Repository:
 
             return CaptureManifestContent.model_validate(
                 {
+                    "schema_version": 2,
                     "run_id": run.id,
                     "project_id": run.project_id,
                     "role_id": run.role_id,
@@ -324,6 +325,7 @@ class Repository:
                             "title": observation.title,
                             "aria": artifact_payload(observation.aria_artifact_id),
                             "screenshot": artifact_payload(observation.screenshot_artifact_id),
+                            "controls": json.loads(observation.controls_json),
                             "observed_at": observation.observed_at,
                         }
                         for observation in observations
@@ -623,6 +625,11 @@ class Repository:
             title=draft.title,
             aria_artifact_id=aria_artifact_id,
             screenshot_artifact_id=screenshot_artifact_id,
+            controls_json=json.dumps(
+                [control.model_dump(mode="json") for control in draft.controls],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
             observed_at=draft.observed_at,
         )
         with self.sessions.begin() as session:

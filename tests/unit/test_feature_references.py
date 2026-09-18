@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+from pydantic_ai.models.test import TestModel
+
 from web2doc.distillation.models import (
     ActionReference,
     ArtifactReference,
@@ -12,7 +15,13 @@ from web2doc.distillation.models import (
     EvidenceReference,
     ObservationReference,
 )
+from web2doc.documentation.feature_composer import PydanticAIFeatureReferenceComposer
 from web2doc.documentation.features import _group_features
+from web2doc.documentation.models import (
+    FeatureEvidenceReference,
+    FeatureReferencePlan,
+    FeatureReferencePlanSection,
+)
 
 
 def _artifact(identifier: str, suffix: str, media_type: str) -> ArtifactReference:
@@ -130,4 +139,46 @@ def test_chainlit_settings_choices_are_grouped_under_controls() -> None:
     assert settings["Prompt profile"].options == ["coding"]
     assert settings["MCP server"].options == ["local-database"]
     assert all(section.evidence[0].support == "demonstrated" for section in settings.values())
+    assert documents[0].summary.startswith("Use Chat settings")
+    assert settings["Model"].description.startswith("Use Model")
     assert [section.title for section in documents[1].sections] == ["New chat"]
+
+
+@pytest.mark.asyncio
+async def test_model_editor_receives_a_plan_but_not_control_of_options() -> None:
+    plan = FeatureReferencePlan(
+        title="Chat settings",
+        purpose="Configure the chat.",
+        audience="Application users",
+        tone="helpful and explanatory",
+        detail="moderate",
+        role="default",
+        sections=[
+            FeatureReferencePlanSection(
+                section_key="model",
+                title="Model",
+                widget_type="combobox",
+                fact_description="A model selector was observed.",
+                options=["Fast", "Accurate"],
+                evidence=[
+                    FeatureEvidenceReference(
+                        observation_id="observation",
+                        screenshot_artifact_id="screenshot",
+                    )
+                ],
+            )
+        ],
+        max_inline_options=20,
+    )
+    model = TestModel(
+        custom_output_args={
+            "summary": "Choose how the assistant should respond.",
+            "section_descriptions": ["Select the model that best matches your task."],
+        }
+    )
+
+    narrative = await PydanticAIFeatureReferenceComposer(model).compose(plan)
+
+    assert narrative.summary == "Choose how the assistant should respond."
+    assert narrative.section_descriptions == ["Select the model that best matches your task."]
+    assert plan.sections[0].options == ["Fast", "Accurate"]

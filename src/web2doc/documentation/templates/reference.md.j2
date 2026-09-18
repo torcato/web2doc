@@ -2,21 +2,32 @@
 
 {{ document.summary | md }}
 
-**Role:** {{ document.role | md }}
+- **Intended audience:** {{ document.audience | md }}
+- **Role:** {{ document.role | md }}
 
 {% for section in document.sections %}
 ## {{ section.title | md }}
 
 {{ section.description | md }} [[🔍]({{ evidence_prefix }}evidence/{{ section.evidence[0].observation_id }}.md)]
 
+{% if document.show_evidence_labels %}
 **Evidence level:** {{ section.evidence[0].support.value | title }}
+{% endif %}
 
 {% if section.options %}
-Observed options:
+{% if section.option_coverage.value == "complete" %}Available options at capture time:{% else %}Options observed while opening this control:{% endif %}
 
+{% if section.collapse_options %}
+<details>
+<summary>Show {{ section.options | length }} options</summary>
+
+{% endif %}
 {% for option in section.options %}
 - {{ option | md }}
 {% endfor %}
+{% if section.collapse_options %}
+</details>
+{% endif %}
 {% endif %}
 <details>
 <summary>View captured interface</summary>

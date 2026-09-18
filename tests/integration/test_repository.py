@@ -59,7 +59,7 @@ def test_migration_can_upgrade_the_same_database_twice(tmp_path: Path) -> None:
 
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0006_feature_references",
+            "0007_observation_controls",
         )
 
 

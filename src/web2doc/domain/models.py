@@ -102,6 +102,18 @@ class PolicyConfig(BaseModel):
     supporting_origins: set[str] = Field(default_factory=set)
 
 
+class DocumentationStyleConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audience: str = Field(default="Application users", min_length=1, max_length=200)
+    tone: str = Field(default="clear, helpful, and explanatory", min_length=1, max_length=300)
+    detail: Literal["concise", "moderate", "detailed"] = "moderate"
+    include_available_options: bool = True
+    max_inline_options: int = Field(default=20, ge=1, le=200)
+    max_editor_seconds: int = Field(default=60, ge=1, le=600)
+    show_evidence_labels: bool = False
+
+
 class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +124,7 @@ class ProjectConfig(BaseModel):
     roles: list[RoleConfig]
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
+    documentation: DocumentationStyleConfig = Field(default_factory=DocumentationStyleConfig)
 
     @field_validator("allowed_origins")
     @classmethod

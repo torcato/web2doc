@@ -75,6 +75,7 @@ class ObservationRow(Base):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     aria_artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False)
     screenshot_artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="RESTRICT"), nullable=False)
+    controls_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     state_id: Mapped[str | None] = mapped_column(ForeignKey("states.id", ondelete="SET NULL"))
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

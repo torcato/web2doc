@@ -16,6 +16,11 @@ class EvidenceLevel(StrEnum):
     VERIFIED = "verified"
 
 
+class OptionCoverage(StrEnum):
+    COMPLETE = "complete"
+    OBSERVED = "observed"
+
+
 class ReviewDecision(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -122,7 +127,10 @@ class FeatureReferenceSection(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=2_000)
-    options: list[str] = Field(default_factory=list, max_length=100)
+    widget_type: str | None = Field(default=None, max_length=100)
+    options: list[str] = Field(default_factory=list, max_length=1_000)
+    option_coverage: OptionCoverage = OptionCoverage.OBSERVED
+    collapse_options: bool = False
     evidence: list[FeatureEvidenceReference] = Field(min_length=1)
 
 
@@ -131,9 +139,45 @@ class FeatureReferenceContent(BaseModel):
 
     title: str = Field(min_length=1, max_length=300)
     summary: str = Field(min_length=1, max_length=2_000)
+    audience: str = Field(default="Application users", min_length=1, max_length=200)
     role: str = Field(min_length=1, max_length=100)
     sections: list[FeatureReferenceSection] = Field(min_length=1)
     unresolved: list[str] = Field(default_factory=list, max_length=100)
+    show_evidence_labels: bool = False
+
+
+class FeatureReferencePlanSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    section_key: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    widget_type: str | None = Field(default=None, max_length=100)
+    fact_description: str = Field(min_length=1, max_length=2_000)
+    options: list[str] = Field(default_factory=list, max_length=1_000)
+    option_coverage: OptionCoverage = OptionCoverage.OBSERVED
+    evidence: list[FeatureEvidenceReference] = Field(min_length=1)
+
+
+class FeatureReferencePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=300)
+    purpose: str = Field(min_length=1, max_length=2_000)
+    audience: str = Field(min_length=1, max_length=200)
+    tone: str = Field(min_length=1, max_length=300)
+    detail: str
+    role: str = Field(min_length=1, max_length=100)
+    sections: list[FeatureReferencePlanSection] = Field(min_length=1)
+    unresolved: list[str] = Field(default_factory=list, max_length=100)
+    max_inline_options: int = Field(ge=1, le=200)
+    show_evidence_labels: bool = False
+
+
+class FeatureReferenceNarrative(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str = Field(min_length=1, max_length=2_000)
+    section_descriptions: list[str] = Field(min_length=1, max_length=1_000)
 
 
 class FeatureReferenceRevision(BaseModel):

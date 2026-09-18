@@ -17,6 +17,19 @@ class ArtifactReference(BaseModel):
     size_bytes: int = Field(ge=0)
 
 
+class ControlReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    name: str
+    href: str | None = None
+    label: str | None = None
+    test_id: str | None = None
+    input_type: str | None = None
+    disabled: bool = False
+    options: list[str] = Field(default_factory=list)
+
+
 class ObservationReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -26,6 +39,7 @@ class ObservationReference(BaseModel):
     title: str
     aria: ArtifactReference
     screenshot: ArtifactReference
+    controls: list[ControlReference] = Field(default_factory=list)
     observed_at: datetime
 
 
@@ -67,7 +81,7 @@ class CandidateFeatureReference(BaseModel):
 class CaptureManifestContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     run_id: str
     project_id: str
     role_id: str

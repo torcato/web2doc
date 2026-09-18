@@ -56,7 +56,7 @@ async def test_pydantic_ai_composer_returns_structured_narrative() -> None:
             "summary": "Create a record safely.",
             "goal": "Create an item",
             "prerequisites": [],
-            "steps": [{"sequence": 1, "instruction": "Enter a name", "expected_result": "The name is visible"}],
+            "steps": [{"sequence": 99, "instruction": "Enter a name", "expected_result": "The name is visible"}],
             "outcome": "The item is persisted",
             "troubleshooting": [],
         }

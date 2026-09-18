@@ -8,9 +8,10 @@ from web2doc.discovery.models import StateIdentity
 from web2doc.distillation.models import CaptureManifest, DistilledFeature
 from web2doc.distillation.service import DistillationService
 from web2doc.documentation.features import FeatureReferenceService
-from web2doc.documentation.models import ReviewDecision
+from web2doc.documentation.models import FeatureReferenceNarrative, ReviewDecision
 from web2doc.documentation.publish import DocumentationPublisher
 from web2doc.domain.models import (
+    ControlDraft,
     DiscoveryMode,
     ObservationDraft,
     RunStatus,
@@ -53,6 +54,13 @@ def seed_capture(repository, tmp_path: Path, project_config) -> tuple[str, Disti
             title="Settings",
             aria_snapshot="- button: Open settings",
             screenshot=b"png",
+            controls=[
+                ControlDraft(
+                    role="combobox",
+                    name="Model",
+                    options=["Standard", "Advanced"],
+                )
+            ],
         ),
         aria.id,
         screenshot.id,
@@ -157,7 +165,7 @@ async def test_observed_features_publish_without_verified_workflows(
     manifest = distillation.freeze(run_id)
     result = await distillation.distill(manifest.id)
 
-    references = FeatureReferenceService(repository).generate(result.processing_attempt_id)
+    references = await FeatureReferenceService(repository).generate(result.processing_attempt_id)
 
     assert [reference.content.title for reference in references] == ["Application settings"]
     assert {section.title for section in references[0].content.sections} == {
@@ -165,6 +173,12 @@ async def test_observed_features_publish_without_verified_workflows(
         "Model",
         "Prompt profile",
     }
+    model_section = next(
+        section for section in references[0].content.sections if section.title == "Model"
+    )
+    assert model_section.options == ["Standard", "Advanced"]
+    assert model_section.option_coverage == "complete"
+    assert model_section.description.startswith("Use Model")
     for reference in references:
         repository.add_feature_reference_review(
             reference.id,
@@ -190,4 +204,32 @@ async def test_observed_features_publish_without_verified_workflows(
     assert "## Model" in content
     assert "## Prompt profile" in content
     assert "## MCP server" in content
+    assert "Available options at capture time:" in content
+    assert "Standard" in content and "Advanced" in content
+    assert "Evidence level:" not in content
+    assert "Intended audience:" in content
     assert (exported / "site" / "index.html").is_file()
+
+
+@pytest.mark.asyncio
+async def test_invalid_feature_editor_output_falls_back_to_deterministic_prose(
+    repository, tmp_path: Path, project_config
+) -> None:
+    run_id, distillation = seed_capture(repository, tmp_path, project_config)
+    manifest = distillation.freeze(run_id)
+    result = await distillation.distill(manifest.id)
+
+    class InvalidFeatureComposer:
+        async def compose(self, _plan) -> FeatureReferenceNarrative:
+            return FeatureReferenceNarrative(
+                summary="Changed structure",
+                section_descriptions=["First", "Unexpected extra section"],
+            )
+
+    references = await FeatureReferenceService(repository).generate(
+        result.processing_attempt_id,
+        InvalidFeatureComposer(),
+    )
+
+    assert references[0].source_kind == "generated-fallback"
+    assert references[0].content.summary.startswith("Use Application settings")

@@ -22,6 +22,10 @@ Because state identity changed from `state-v1` to `state-v2`, old discovery runs
 
 Completed distillation results can now produce versioned feature-reference documents. Configuration controls are grouped into a settings page and choices observed after opening each control are rendered as options rather than standalone pages. References record observed or demonstrated evidence separately from verified workflow claims, support exact-revision review bundles, and export alongside verified guides. `docs-generate` runs capture freezing, distillation, reference generation, automatic review, workflow verification, and combined export in one operation.
 
+New observations persist a structured control inventory in capture manifest schema 2. This preserves native select options for offline documentation, while custom dropdown choices continue to come from captured state transitions. An intermediate documentation plan owns page structure, widget types, option lists, option-completeness labels, audience, tone, and evidence. Optional model editing receives a bounded plan and may return only a summary and one explanation per existing section. Invalid output falls back to a more explanatory deterministic editor without changing facts.
+
+AI documentation composition is isolated from verified workflow structure. Returned prose is assigned the verified step order, and structural or provider failures fall back to deterministic composition for only the affected document. The run continues and marks a newly created fallback revision with source kind `generated-fallback`.
+
 ## Storage migration
 
 Alembic revision `0005_offline_distillation` adds:
@@ -30,12 +34,15 @@ Alembic revision `0005_offline_distillation` adds:
 - `processing_attempts` for independently retryable offline stages;
 - `distilled_features` for evidence-linked feature drafts.
 
+Revision `0006_feature_references` adds versioned feature-reference documents and exact-revision reviews. Revision
+`0007_observation_controls` adds structured control inventories to observations for offline option documentation.
+
 The migration is additive. Existing run, workflow, verification, document, review, and export tables are unchanged.
 
 ## Validation
 
-Automated coverage verifies idempotent manifest freezing, artifact-integrity checks through the artifact store, evidence-linked deterministic output, successful-result reuse, and retry after an offline processing failure without new browser actions. Discovery regressions cover volatile Chainlit-style references, settings-first scheduling, repeat suppression, planner failure, and model-budget fallback. Migration, repository, CLI help, lint, and strict type checks pass. Browser extraction no longer presents arbitrary DOM IDs as user-facing names; known controls can still receive explicit synthetic labels.
+Automated coverage verifies idempotent manifest freezing, artifact-integrity checks through the artifact store, evidence-linked deterministic output, successful-result reuse, structured select options, documentation plans, constrained model editing, model fallback, and retry after an offline processing failure without new browser actions. Discovery regressions cover volatile Chainlit-style references, settings-first scheduling, repeat suppression, planner failure, and model-budget fallback. Migration, repository, CLI help, lint, and strict type checks pass. Browser extraction no longer presents arbitrary DOM IDs as user-facing names; known controls can still receive explicit synthetic labels.
 
 ## Next slice
 
-Add optional model-backed offline grouping on top of the deterministic grouping contract and improve generic area classification beyond settings/interfaces. Model-assistance batching, legacy-run migration, persisted resume configuration, and parameterized replay remain separate follow-up work.
+Improve generic area classification beyond settings/interfaces and add owner-maintained descriptions for product-specific option values. Model-assistance batching, legacy-run migration, persisted resume configuration, and parameterized replay remain separate follow-up work.

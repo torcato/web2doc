@@ -20,6 +20,7 @@ from web2doc.discovery.planner import HeuristicPlanner, PydanticAIPlanner
 from web2doc.discovery.runner import ExplorationRunner
 from web2doc.distillation.service import DistillationService
 from web2doc.documentation.composer import DeterministicComposer, PydanticAIDocumentComposer
+from web2doc.documentation.feature_composer import PydanticAIFeatureReferenceComposer
 from web2doc.documentation.features import FeatureReferenceService
 from web2doc.documentation.models import OwnerSourceDraft, OwnerSourceKind, ReviewDecision
 from web2doc.documentation.publish import DocumentationPublisher
@@ -331,15 +332,33 @@ def distill(
 def feature_reference_generate(
     project_dir: Annotated[Path, typer.Argument(help="Project directory")],
     run_id: Annotated[str, typer.Option("--run", help="Capture or discovery run identifier")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Pydantic AI editorial model")
+    ] = None,
 ) -> None:
     """Generate reviewable feature-reference pages from saved discovery evidence."""
 
-    _config, repository, _project_id, _roles = _open_project(project_dir)
+    config, repository, _project_id, _roles = _open_project(project_dir)
     try:
+        selected_model = load_runtime_settings(project_dir).model_for_documentation(model)
         distillation = DistillationService(repository, ArtifactStore(project_dir / RUNTIME_DIR))
         manifest = distillation.freeze(run_id)
         result = asyncio.run(distillation.distill(manifest.id))
-        references = FeatureReferenceService(repository).generate(result.processing_attempt_id)
+        feature_composer = (
+            PydanticAIFeatureReferenceComposer(
+                selected_model,
+                project_description=config.description,
+                owner_sources=[source.content for source in repository.list_owner_sources(_project_id)],
+            )
+            if selected_model
+            else None
+        )
+        references = asyncio.run(
+            FeatureReferenceService(repository, style=config.documentation).generate(
+                result.processing_attempt_id,
+                feature_composer,
+            )
+        )
         typer.echo(json.dumps([item.model_dump(mode="json") for item in references], indent=2))
     finally:
         repository.close()
@@ -481,6 +500,7 @@ def document_generate(
                 workflow_revision_id,
                 composer,
                 verification_id=verification_id,
+                fallback_composer=DeterministicComposer() if selected_model else None,
             )
         )
         typer.echo(revision.model_dump_json(indent=2))
@@ -702,15 +722,27 @@ def docs_generate(
         distillation = DistillationService(repository, artifact_store)
         manifest = distillation.freeze(discovery_run_id)
         distilled = asyncio.run(distillation.distill(manifest.id))
-        feature_references = FeatureReferenceService(repository).generate(
-            distilled.processing_attempt_id
+        documentation_model = settings.model_for_documentation()
+        feature_composer = (
+            PydanticAIFeatureReferenceComposer(
+                documentation_model,
+                project_description=config.description,
+                owner_sources=[source.content for source in repository.list_owner_sources(project_id)],
+            )
+            if documentation_model
+            else None
+        )
+        feature_references = asyncio.run(
+            FeatureReferenceService(repository, style=config.documentation).generate(
+                distilled.processing_attempt_id,
+                feature_composer,
+            )
         )
         for reference in feature_references:
             repository.add_feature_reference_review(
                 reference.id, ReviewDecision.APPROVED, reviewer, notes
             )
         definitions = draft_workflows(repository, discovery_run_id=discovery_run_id, role=role)
-        documentation_model = settings.model_for_documentation()
         generated: list[dict[str, object]] = []
         for definition in definitions:
             revision = repository.add_workflow_revision(
@@ -738,13 +770,17 @@ def docs_generate(
                     }
                 )
                 continue
+            primary_composer = (
+                PydanticAIDocumentComposer(documentation_model)
+                if documentation_model
+                else DeterministicComposer()
+            )
             document = asyncio.run(
                 DocumentationService(repository, project_id, config.description).generate(
                     revision.id,
-                    PydanticAIDocumentComposer(documentation_model)
-                    if documentation_model
-                    else DeterministicComposer(),
+                    primary_composer,
                     verification_id=str(verification["id"]),
+                    fallback_composer=DeterministicComposer() if documentation_model else None,
                 )
             )
             repository.add_review_decision(document.id, ReviewDecision.APPROVED, reviewer, notes)
@@ -755,6 +791,7 @@ def docs_generate(
                     "verification_id": verification["id"],
                     "document_revision_id": document.id,
                     "document_version": document.version,
+                    "composition": document.source_kind,
                     "status": "approved",
                 }
             )

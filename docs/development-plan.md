@@ -58,8 +58,8 @@ Acceptance: an invalid planner response on a page with many controls cannot disc
 
 ## Phase C — Distill features and procedures from saved evidence
 
-- [ ] Extract offline services for feature grouping, representative path selection, procedure proposals, and unresolved-question reporting.
-- [ ] Process bounded evidence groups by area and role, with provenance-preserving merging.
+- [x] Extract offline services for deterministic feature grouping, documentation planning, and unresolved-question reporting. Representative procedure proposals remain pending.
+- [x] Process bounded documentation plans by area and role, with provenance-preserving merging and model fallback.
 - [ ] Persist per-group model results, prompt/model versions, and usage. The first slice persists deterministic processor configuration, results, errors, and retries.
 - [x] Reuse completed outputs only when manifest and processor configuration identity match; create a new manifest revision when captured inputs change.
 - [ ] Validate procedure proposals against recorded action continuity. Missing steps become capture requests, never demonstrated instructions.
@@ -72,13 +72,13 @@ Acceptance: close the browser and make the target unreachable, then distill a sa
 ## Phase D — Publish the documentation evidence supports
 
 - [x] Add a feature-reference document kind with observed and demonstrated evidence support distinct from editorial approval; verified workflow guides remain separate.
-- [x] Define conservative feature-reference schemas and templates for visible controls, observed options, evidence levels, and limitations.
+- [x] Define feature-reference schemas and templates for visible controls, widget types, native and custom options, evidence levels, audience, and limitations.
 - [x] Compose feature references from persisted distillation and resolve illustrations only to retained artifacts.
-- [ ] Validate claim support, role, evidence currency, and document revision independently of model prose.
+- [x] Keep section structure, option inventories, role, evidence, and document revisions independent of model prose. Semantic claim auditing remains an editorial review responsibility.
 - [x] Preserve existing verification gates for procedure exports and add the observed feature-reference path with exact-revision approval.
 - [x] Define automatic approval eligibility for generated feature references in `docs-generate`; demonstrated-only procedures are not treated as verified.
 - [x] Extend coverage reports with feature-reference evidence levels, approval, exportability, and unresolved limitations.
-- [ ] Retry composition per document and preserve previous reviews and manual edits as revisions.
+- [x] Fall back composition per document and preserve previous reviews as exact revisions.
 
 Likely areas: document models, `documentation/service.py`, `composer.py`, templates, `publish.py`, repository coverage, and review commands.
 
